@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code local settings (not shared)
+.claude/settings.local.json
+
+# pnpm
+.pnpm-debug.log
+
+# Test coverage
+coverage/
+
+# Temporary files
+*.tmp

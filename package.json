@@ -1,0 +1,35 @@
+{
+	"name": "a-eyes",
+	"version": "0.1.0",
+	"description": "Screenshot MCP server for Claude Code on Windows via WSL2",
+	"type": "module",
+	"main": "dist/index.js",
+	"bin": {
+		"a-eyes": "dist/index.js"
+	},
+	"scripts": {
+		"build": "tsc",
+		"dev": "tsx watch src/index.ts",
+		"start": "node dist/index.js",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"lint": "biome check .",
+		"lint:fix": "biome check --write ."
+	},
+	"keywords": ["mcp", "screenshot", "claude-code", "wsl2", "windows"],
+	"license": "MIT",
+	"engines": {
+		"node": ">=22.0.0"
+	},
+	"dependencies": {
+		"@modelcontextprotocol/sdk": "^1.12.1",
+		"zod": "^3.24.4"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^1.9.4",
+		"@types/node": "^22.15.3",
+		"tsx": "^4.19.4",
+		"typescript": "^5.8.3",
+		"vitest": "^3.1.1"
+	}
+}
