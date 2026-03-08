@@ -1,64 +1,57 @@
 # A-Eyes
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Node.js](https://img.shields.io/badge/Node.js-22%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-18%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![MCP](https://img.shields.io/badge/MCP-Model%20Context%20Protocol-6366F1)](https://modelcontextprotocol.io/)
-[![pnpm](https://img.shields.io/badge/pnpm-10.x-F69220?logo=pnpm&logoColor=white)](https://pnpm.io/)
-[![Biome](https://img.shields.io/badge/Biome-Linter%20%26%20Formatter-60A5FA?logo=biome&logoColor=white)](https://biomejs.dev/)
-[![Vitest](https://img.shields.io/badge/Vitest-Testing-6E9F18?logo=vitest&logoColor=white)](https://vitest.dev/)
 
-**Screenshot MCP server for Claude Code on Windows via WSL2.**
+An MCP server that gives [Claude Code](https://docs.anthropic.com/en/docs/claude-code) the ability to capture screenshots of Windows applications through WSL2. The Windows equivalent of [Peekaboo](https://github.com/steipete/Peekaboo) (macOS).
 
-A-Eyes enables AI agents to capture screenshots of Windows applications directly from Claude Code. Inspired by [Peekaboo](https://github.com/steipete/Peekaboo) (macOS), A-Eyes brings visual perception to Claude Code on Windows.
+## Security Model
 
-## How It Works
+A-Eyes treats screenshot access as a security-sensitive operation. The design assumes that an AI agent requesting screen captures should be constrained by default, not trusted by default.
+
+**Deny-by-default access control.** Without an explicit allowlist in `a-eyes.config.json`, every capture request is blocked. There is no "capture everything" mode. The operator decides which windows are accessible — the AI agent cannot override this.
+
+**Tamper-resistant audit logging.** Every tool invocation (capture, query, list_windows) is logged to `~/.a-eyes/logs/audit-YYYY-MM-DD.jsonl` — append-only, daily rotation. There is no MCP tool to read, modify, or delete these logs. The AI agent can only access them through filesystem tools that the operator can deny at the permission prompt. Each log entry records timestamp, tool name, parameters, result status, and execution duration.
+
+**No shell interpolation.** Window titles are passed as `execFile` argv arrays, never interpolated into shell command strings. This eliminates command injection through crafted window titles — a realistic attack vector when an AI agent chooses which windows to capture.
+
+**Schema-validated inputs.** All MCP tool parameters are validated through Zod schemas before any processing. Malformed requests fail at the boundary, not inside business logic.
+
+## Architecture
 
 ```
-Claude Code  →  MCP Server (TypeScript, WSL2)
-                    ↓
-              PowerShell script (powershell.exe)
-                    ↓
-              Windows Screenshot APIs (Win32)
-                    ↓
-              PNG image → returned to Claude Code
+Claude Code  ──MCP/stdio──►  A-Eyes Server (TypeScript, WSL2)
+                                    │
+                              powershell.exe (execFile, argv)
+                                    │
+                              Win32 API (FindWindow, PrintWindow)
+                                    │
+                              PNG ──base64──► returned to Claude Code
 ```
+
+The server runs inside WSL2 and calls Windows PowerShell scripts through WSL interop. Screenshots never touch the filesystem unless explicitly configured — they are returned as base64-encoded PNG data over the MCP stdio transport.
 
 ## Tools
 
 | Tool | Description |
 |------|-------------|
-| **`capture`** | Take a screenshot of a window by title or app name. Optionally save to disk via `output_path` |
-| **`list_windows`** | List all visible windows on the Windows desktop (with capturable/blocked markers) |
-| **`query`** | Capture a screenshot and ask a question about its content |
+| `capture` | Screenshot a window by title. Optionally save to disk via `output_path`. |
+| `list_windows` | List all visible windows. Shows `+`/`-` markers for capturable vs. blocked. |
+| `query` | Capture a screenshot and forward a question about its content to Claude. |
 
-## Requirements
+## Installation & Quickstart
 
-- **WSL2** on Windows 10/11
-- **Node.js 18+** (in WSL2)
-- **pnpm** (or use `npx pnpm`)
-- **PowerShell** (built-in on Windows, called from WSL2 via `powershell.exe`)
-
-## Installation
-
-### From source
+**Requirements:** WSL2 on Windows 10/11, Node.js 18+, pnpm
 
 ```bash
 git clone https://github.com/florian-priegnitz/a-eyes.git
 cd a-eyes
-pnpm install
-pnpm build
+pnpm install && pnpm build
 ```
 
-### From npm (once published)
-
-```bash
-npm install -g a-eyes
-```
-
-## Claude Code Configuration
-
-Add to your Claude Code MCP settings (`~/.claude/settings.json`):
+Register as MCP server in `~/.claude/settings.json`:
 
 ```json
 {
@@ -72,116 +65,55 @@ Add to your Claude Code MCP settings (`~/.claude/settings.json`):
 }
 ```
 
-## Usage Examples
+Create an allowlist (without this, all captures are blocked):
 
-Once configured, Claude Code can use the tools directly:
+```bash
+cp a-eyes.config.example.json a-eyes.config.json
+# Edit the allowlist to match your environment
+```
 
-- *"Take a screenshot of Chrome"* → calls `capture`
-- *"What windows are open?"* → calls `list_windows`
-- *"What error is shown in VS Code?"* → calls `query`
-- *"Take a screenshot of Firefox and save it to ~/screenshots"* → calls `capture` with `output_path`
+Then in Claude Code: *"Take a screenshot of Chrome"* or *"What windows are open?"*
 
 ## Configuration
 
-Create a config file to configure allowed windows and screenshot saving. A-Eyes searches for config in this order:
-
-1. `./a-eyes.config.json` (project directory)
-2. `~/.a-eyes/config.json` (user home)
-
-If neither exists, the default deny-by-default config is used.
+A-Eyes searches for config in order: `./a-eyes.config.json` (project) → `~/.a-eyes/config.json` (user home) → deny-all defaults.
 
 ```json
 {
   "allowlist": ["Chrome", "VS Code", "Firefox"],
-  "save_screenshots": true,
+  "save_screenshots": false,
   "screenshot_dir": "./screenshots"
 }
 ```
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `allowlist` | `[]` (none) | Window title patterns that can be captured. **Without an allowlist, all captures are blocked** (deny-by-default) |
-| `save_screenshots` | `false` | Automatically save every captured screenshot to disk |
-| `screenshot_dir` | `"./screenshots"` | Directory for auto-saved screenshots (used when `save_screenshots` is `true`) |
+| `allowlist` | `[]` | Window title substrings that are allowed for capture. Empty = all blocked. |
+| `save_screenshots` | `false` | Auto-save every capture to `screenshot_dir`. |
+| `screenshot_dir` | `"./screenshots"` | Target directory for auto-saved PNGs. |
 
-> **Security**: Without a configured allowlist, no windows can be captured. This is intentional — A-Eyes follows a deny-by-default security model.
-
-## Security
-
-- **Deny-by-default** — no captures without an explicit allowlist
-- **Input validation** on all MCP tool parameters (Zod schemas)
-- **No shell interpolation** — `execFile` passes `window_title` as argv, not as shell string
-- **Audit logging** — all tool calls are logged to `~/.a-eyes/logs/audit-YYYY-MM-DD.jsonl` (always active, no MCP read/delete access). Logs include timestamp, tool name, parameters, result, and duration
-- **No temp files** — screenshots are passed as base64 in memory (file saving is opt-in)
-
-## Development
+## Testing
 
 ```bash
-pnpm install        # Install dependencies
-pnpm build          # Compile TypeScript
-pnpm dev            # Development mode with watch
-pnpm test           # Run tests (68 tests)
-pnpm lint           # Lint with Biome
-pnpm lint:fix       # Auto-fix lint issues
+pnpm test           # 72 tests across 8 files
+pnpm lint           # Biome linter + formatter
 ```
 
-If `pnpm` is not available in `PATH`, use `npx pnpm` or npm equivalents:
-
-```bash
-npm run build
-npm run test
-npm run lint
-```
-
-Detailed manual test procedure: [`docs/TESTING_GUIDE.md`](docs/TESTING_GUIDE.md)
-
-## Project Structure
-
-```
-a-eyes/
-├── src/
-│   ├── index.ts              # MCP server entry point
-│   ├── server.ts             # Tool registration (capture, list_windows, query)
-│   ├── capture.ts            # Screenshot capture via PowerShell
-│   ├── list-windows.ts       # Window enumeration via PowerShell
-│   ├── config.ts             # Config loading with Zod validation
-│   ├── audit-log.ts          # Tamper-resistant audit logging (JSONL)
-│   ├── save-screenshot.ts    # Screenshot file saving utilities
-│   ├── windows-path.ts       # WSL path → Windows/UNC conversion
-│   ├── powershell-output.ts  # Robust JSON/base64 parsing helpers
-│   └── windows-interop.ts    # Interop error normalization
-├── scripts/
-│   ├── screenshot.ps1        # Win32 API window capture
-│   └── list-windows.ps1      # Win32 API window enumeration
-├── tests/                    # Vitest test suite (68 tests)
-└── docs/                     # Architecture docs, ADRs, changelog
-```
+Test coverage includes: config loading and search chain, capture/list-windows PowerShell integration, audit log file rotation and append behavior, server-level tool handler responses for success, blocked, and error paths, WSL path conversion edge cases.
 
 ## Troubleshooting
 
-### `powershell.exe` fails with `Exec format error`
+**`Exec format error` when calling PowerShell:** WSL interop is disabled. Run `wsl --shutdown` from Windows CMD/PowerShell, then restart your distro.
 
-This indicates WSL Windows interop is disabled in the current session.
-
-1. Run `wsl --shutdown` from **Windows PowerShell/CMD** (not from inside WSL).
-2. Start the distro again (`wsl -d <YourDistro>`).
-3. Re-run `list_windows`/`capture`.
-
-### Quick interop health check
-
-Run inside WSL:
+**Quick health check** (run inside WSL):
 
 ```bash
-test -e /proc/sys/fs/binfmt_misc/WSLInterop && echo WSLInterop_present || echo WSLInterop_missing
-/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'
+test -e /proc/sys/fs/binfmt_misc/WSLInterop && echo OK || echo MISSING
 ```
 
-Expected: `WSLInterop_present` and a PowerShell version string.
+## Author
 
-## Acknowledgements
-
-- [Peekaboo](https://github.com/steipete/Peekaboo) — macOS screenshot MCP server (direct inspiration)
-- [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) — Model Context Protocol SDK
+Built by [Florian Priegnitz](https://linkedin.com/in/florianpriegnitz), Information Security Consultant at SECURAM Consulting, Hamburg. Focus areas: ISO 27001, AI governance, and security tooling. More projects on [GitHub](https://github.com/florian-priegnitz).
 
 ## License
 
