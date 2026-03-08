@@ -7,6 +7,7 @@
 	"bin": {
 		"a-eyes": "dist/index.js"
 	},
+	"files": ["dist/", "scripts/*.ps1", "LICENSE", "README.md", "a-eyes.config.example.json"],
 	"scripts": {
 		"build": "tsc",
 		"dev": "tsx watch src/index.ts",
@@ -14,12 +15,22 @@
 		"test": "vitest run",
 		"test:watch": "vitest",
 		"lint": "biome check .",
-		"lint:fix": "biome check --write ."
+		"lint:fix": "biome check --write .",
+		"prepublishOnly": "npm run build"
 	},
 	"keywords": ["mcp", "screenshot", "claude-code", "wsl2", "windows"],
 	"license": "MIT",
+	"author": "Florian Priegnitz",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/florian-priegnitz/a-eyes.git"
+	},
+	"homepage": "https://github.com/florian-priegnitz/a-eyes",
+	"bugs": {
+		"url": "https://github.com/florian-priegnitz/a-eyes/issues"
+	},
 	"engines": {
-		"node": ">=22.0.0"
+		"node": ">=18.0.0"
 	},
 	"dependencies": {
 		"@modelcontextprotocol/sdk": "^1.12.1",

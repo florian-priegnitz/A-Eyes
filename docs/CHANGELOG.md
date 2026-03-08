@@ -11,8 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tamper-resistant audit logging to `~/.a-eyes/logs/` — all tool calls (capture, query, list_windows) are logged as JSONL with timestamp, params, result, and duration
 - New `src/audit-log.ts` module with `getAuditLogPath()` and `writeAuditEntry()` functions
 - Unit tests for audit-log module and audit logging integration in server tests
+- Config search chain: searches `./a-eyes.config.json` (project), then `~/.a-eyes/config.json` (user home), then defaults
+- npm publish readiness: `files`, `repository`, `homepage`, `bugs`, `author`, `prepublishOnly` fields in package.json
+- Example config file `a-eyes.config.example.json` in repo
 
 ### Changed
+- Node.js engine requirement lowered from `>=22.0.0` to `>=18.0.0` (no Node 22-specific features used)
+- Config validation errors now include the file path for easier debugging
 - **BREAKING**: Allowlist is now deny-by-default — without a configured allowlist, all captures are blocked
 - Improved error messages: capture/query without allowlist now shows a config hint instead of "not in the allowlist"
 

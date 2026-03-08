@@ -1,8 +1,29 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { isWindowAllowed, loadConfig } from "../src/config.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { mockHomeDir } = vi.hoisted(() => {
+	let dir = "";
+	return {
+		mockHomeDir: {
+			set(d: string) {
+				dir = d;
+			},
+			get() {
+				return dir;
+			},
+		},
+	};
+});
+
+vi.mock("node:os", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:os")>();
+	return { ...actual, homedir: () => mockHomeDir.get() || actual.homedir() };
+});
+
+// Must import AFTER vi.mock
+const { isWindowAllowed, loadConfig } = await import("../src/config.js");
 
 describe("loadConfig", () => {
 	let tempDir: string;
@@ -80,6 +101,62 @@ describe("loadConfig", () => {
 		await writeFile(configPath, "not json");
 
 		await expect(loadConfig(configPath)).rejects.toThrow();
+	});
+
+	it("includes file path in validation error message", async () => {
+		const configPath = join(tempDir, "config.json");
+		await writeFile(configPath, JSON.stringify({ allowlist: "not-an-array" }));
+
+		await expect(loadConfig(configPath)).rejects.toThrow(configPath);
+	});
+});
+
+describe("loadConfig search chain", () => {
+	let cwdDir: string;
+	let homeDir: string;
+	const originalCwd = process.cwd;
+
+	beforeEach(async () => {
+		cwdDir = await mkdtemp(join(tmpdir(), "a-eyes-cwd-"));
+		homeDir = await mkdtemp(join(tmpdir(), "a-eyes-home-"));
+		process.cwd = () => cwdDir;
+		mockHomeDir.set(homeDir);
+	});
+
+	afterEach(async () => {
+		process.cwd = originalCwd;
+		mockHomeDir.set("");
+		await rm(cwdDir, { recursive: true });
+		await rm(homeDir, { recursive: true });
+	});
+
+	it("prefers cwd config over home config", async () => {
+		await writeFile(join(cwdDir, "a-eyes.config.json"), JSON.stringify({ allowlist: ["CWD"] }));
+		await mkdir(join(homeDir, ".a-eyes"), { recursive: true });
+		await writeFile(
+			join(homeDir, ".a-eyes", "config.json"),
+			JSON.stringify({ allowlist: ["HOME"] }),
+		);
+
+		const config = await loadConfig();
+		expect(config.allowlist).toEqual(["CWD"]);
+	});
+
+	it("falls back to home config when cwd config missing", async () => {
+		await mkdir(join(homeDir, ".a-eyes"), { recursive: true });
+		await writeFile(
+			join(homeDir, ".a-eyes", "config.json"),
+			JSON.stringify({ allowlist: ["HOME"] }),
+		);
+
+		const config = await loadConfig();
+		expect(config.allowlist).toEqual(["HOME"]);
+	});
+
+	it("returns defaults when neither cwd nor home config exists", async () => {
+		const config = await loadConfig();
+		expect(config.save_screenshots).toBe(false);
+		expect(config.allowlist).toBeUndefined();
 	});
 });
 

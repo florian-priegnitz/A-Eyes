@@ -35,17 +35,25 @@ Claude Code  →  MCP Server (TypeScript, WSL2)
 ## Requirements
 
 - **WSL2** on Windows 10/11
-- **Node.js 22+** (in WSL2)
+- **Node.js 18+** (in WSL2)
 - **pnpm** (or use `npx pnpm`)
 - **PowerShell** (built-in on Windows, called from WSL2 via `powershell.exe`)
 
 ## Installation
+
+### From source
 
 ```bash
 git clone https://github.com/florian-priegnitz/a-eyes.git
 cd a-eyes
 pnpm install
 pnpm build
+```
+
+### From npm (once published)
+
+```bash
+npm install -g a-eyes
 ```
 
 ## Claude Code Configuration
@@ -75,7 +83,12 @@ Once configured, Claude Code can use the tools directly:
 
 ## Configuration
 
-Create `a-eyes.config.json` in the project root to configure allowed windows and screenshot saving:
+Create a config file to configure allowed windows and screenshot saving. A-Eyes searches for config in this order:
+
+1. `./a-eyes.config.json` (project directory)
+2. `~/.a-eyes/config.json` (user home)
+
+If neither exists, the default deny-by-default config is used.
 
 ```json
 {

@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import { z } from "zod";
 
 const ConfigSchema = z.object({
@@ -15,22 +16,40 @@ const DEFAULT_CONFIG: AEyesConfig = {
 	screenshot_dir: "./screenshots",
 };
 
-export async function loadConfig(configPath?: string): Promise<AEyesConfig> {
-	const filePath = configPath ?? resolve(process.cwd(), "a-eyes.config.json");
-
+async function tryReadConfig(filePath: string): Promise<AEyesConfig | null> {
 	try {
 		const raw = await readFile(filePath, "utf-8");
 		const parsed = JSON.parse(raw);
 		return ConfigSchema.parse(parsed);
 	} catch (err) {
 		if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
-			return DEFAULT_CONFIG;
+			return null;
 		}
 		if (err instanceof z.ZodError) {
-			throw new Error(`Invalid config: ${err.issues.map((i) => i.message).join(", ")}`);
+			throw new Error(
+				`Invalid config in ${filePath}: ${err.issues.map((i) => i.message).join(", ")}`,
+			);
 		}
 		throw err;
 	}
+}
+
+export async function loadConfig(configPath?: string): Promise<AEyesConfig> {
+	if (configPath) {
+		const result = await tryReadConfig(configPath);
+		return result ?? DEFAULT_CONFIG;
+	}
+
+	// Search chain: cwd → ~/.a-eyes/config.json → defaults
+	const cwdConfig = resolve(process.cwd(), "a-eyes.config.json");
+	const cwdResult = await tryReadConfig(cwdConfig);
+	if (cwdResult) return cwdResult;
+
+	const homeConfig = join(homedir(), ".a-eyes", "config.json");
+	const homeResult = await tryReadConfig(homeConfig);
+	if (homeResult) return homeResult;
+
+	return DEFAULT_CONFIG;
 }
 
 export function isWindowAllowed(config: AEyesConfig, windowTitle: string): boolean {
