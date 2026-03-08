@@ -17,7 +17,8 @@ describe("loadConfig", () => {
 
 	it("returns default config when file does not exist", async () => {
 		const config = await loadConfig(join(tempDir, "nonexistent.json"));
-		expect(config).toEqual({});
+		expect(config.save_screenshots).toBe(false);
+		expect(config.screenshot_dir).toBe("./screenshots");
 	});
 
 	it("loads valid config with allowlist", async () => {
@@ -33,7 +34,38 @@ describe("loadConfig", () => {
 		await writeFile(configPath, JSON.stringify({}));
 
 		const config = await loadConfig(configPath);
-		expect(config).toEqual({});
+		expect(config.allowlist).toBeUndefined();
+		expect(config.save_screenshots).toBe(false);
+		expect(config.screenshot_dir).toBe("./screenshots");
+	});
+
+	it("loads config with save_screenshots enabled", async () => {
+		const configPath = join(tempDir, "config.json");
+		await writeFile(
+			configPath,
+			JSON.stringify({ save_screenshots: true, screenshot_dir: "/tmp/shots" }),
+		);
+
+		const config = await loadConfig(configPath);
+		expect(config.save_screenshots).toBe(true);
+		expect(config.screenshot_dir).toBe("/tmp/shots");
+	});
+
+	it("applies defaults for missing save fields", async () => {
+		const configPath = join(tempDir, "config.json");
+		await writeFile(configPath, JSON.stringify({ allowlist: ["Chrome"] }));
+
+		const config = await loadConfig(configPath);
+		expect(config.allowlist).toEqual(["Chrome"]);
+		expect(config.save_screenshots).toBe(false);
+		expect(config.screenshot_dir).toBe("./screenshots");
+	});
+
+	it("rejects invalid save_screenshots type", async () => {
+		const configPath = join(tempDir, "config.json");
+		await writeFile(configPath, JSON.stringify({ save_screenshots: "yes" }));
+
+		await expect(loadConfig(configPath)).rejects.toThrow("Invalid config");
 	});
 
 	it("throws on invalid config schema", async () => {
@@ -52,12 +84,12 @@ describe("loadConfig", () => {
 });
 
 describe("isWindowAllowed", () => {
-	it("allows all windows when no allowlist", () => {
-		expect(isWindowAllowed({}, "Any Window")).toBe(true);
+	it("blocks all windows when no allowlist configured", () => {
+		expect(isWindowAllowed({}, "Any Window")).toBe(false);
 	});
 
-	it("allows all windows when allowlist is empty", () => {
-		expect(isWindowAllowed({ allowlist: [] }, "Any Window")).toBe(true);
+	it("blocks all windows when allowlist is empty", () => {
+		expect(isWindowAllowed({ allowlist: [] }, "Any Window")).toBe(false);
 	});
 
 	it("allows matching window (case-insensitive)", () => {

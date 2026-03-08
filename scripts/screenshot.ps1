@@ -68,6 +68,7 @@ public class Win32 {
 # Find window by title (partial match)
 $foundHandle = [IntPtr]::Zero
 $foundTitle = ""
+$windowTitlePattern = "*$([System.Management.Automation.WildcardPattern]::Escape($WindowTitle))*"
 
 $callback = [Win32+EnumWindowsProc]{
     param($hWnd, $lParam)
@@ -81,7 +82,7 @@ $callback = [Win32+EnumWindowsProc]{
     [Win32]::GetWindowText($hWnd, $sb, $sb.Capacity) | Out-Null
     $title = $sb.ToString()
 
-    if ($title -like "*$WindowTitle*") {
+    if ($title -like $script:windowTitlePattern) {
         $script:foundHandle = $hWnd
         $script:foundTitle = $title
         return $false  # Stop enumerating

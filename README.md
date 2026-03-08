@@ -28,8 +28,8 @@ Claude Code  →  MCP Server (TypeScript, WSL2)
 
 | Tool | Description |
 |------|-------------|
-| **`capture`** | Take a screenshot of a window by title or app name |
-| **`list_windows`** | List all visible windows on the Windows desktop |
+| **`capture`** | Take a screenshot of a window by title or app name. Optionally save to disk via `output_path` |
+| **`list_windows`** | List all visible windows on the Windows desktop (with capturable/blocked markers) |
 | **`query`** | Capture a screenshot and ask a question about its content |
 
 ## Requirements
@@ -71,18 +71,35 @@ Once configured, Claude Code can use the tools directly:
 - *"Take a screenshot of Chrome"* → calls `capture`
 - *"What windows are open?"* → calls `list_windows`
 - *"What error is shown in VS Code?"* → calls `query`
+- *"Take a screenshot of Firefox and save it to ~/screenshots"* → calls `capture` with `output_path`
 
 ## Configuration
 
-Optionally create `a-eyes.config.json` to restrict which windows can be captured:
+Create `a-eyes.config.json` in the project root to configure allowed windows and screenshot saving:
 
 ```json
 {
-  "allowlist": ["Chrome", "VS Code", "Firefox"]
+  "allowlist": ["Chrome", "VS Code", "Firefox"],
+  "save_screenshots": true,
+  "screenshot_dir": "./screenshots"
 }
 ```
 
-When no config file is present, all windows are accessible.
+| Option | Default | Description |
+|--------|---------|-------------|
+| `allowlist` | `[]` (none) | Window title patterns that can be captured. **Without an allowlist, all captures are blocked** (deny-by-default) |
+| `save_screenshots` | `false` | Automatically save every captured screenshot to disk |
+| `screenshot_dir` | `"./screenshots"` | Directory for auto-saved screenshots (used when `save_screenshots` is `true`) |
+
+> **Security**: Without a configured allowlist, no windows can be captured. This is intentional — A-Eyes follows a deny-by-default security model.
+
+## Security
+
+- **Deny-by-default** — no captures without an explicit allowlist
+- **Input validation** on all MCP tool parameters (Zod schemas)
+- **No shell interpolation** — `execFile` passes `window_title` as argv, not as shell string
+- **Audit logging** — all tool calls are logged to `~/.a-eyes/logs/audit-YYYY-MM-DD.jsonl` (always active, no MCP read/delete access). Logs include timestamp, tool name, parameters, result, and duration
+- **No temp files** — screenshots are passed as base64 in memory (file saving is opt-in)
 
 ## Development
 
@@ -90,34 +107,63 @@ When no config file is present, all windows are accessible.
 pnpm install        # Install dependencies
 pnpm build          # Compile TypeScript
 pnpm dev            # Development mode with watch
-pnpm test           # Run tests
+pnpm test           # Run tests (68 tests)
 pnpm lint           # Lint with Biome
 pnpm lint:fix       # Auto-fix lint issues
 ```
+
+If `pnpm` is not available in `PATH`, use `npx pnpm` or npm equivalents:
+
+```bash
+npm run build
+npm run test
+npm run lint
+```
+
+Detailed manual test procedure: [`docs/TESTING_GUIDE.md`](docs/TESTING_GUIDE.md)
 
 ## Project Structure
 
 ```
 a-eyes/
 ├── src/
-│   ├── index.ts           # MCP server entry point
-│   ├── server.ts          # Tool registration (capture, list_windows, query)
-│   ├── capture.ts         # Screenshot capture via PowerShell
-│   ├── list-windows.ts    # Window enumeration via PowerShell
-│   └── config.ts          # Config loading with Zod validation
+│   ├── index.ts              # MCP server entry point
+│   ├── server.ts             # Tool registration (capture, list_windows, query)
+│   ├── capture.ts            # Screenshot capture via PowerShell
+│   ├── list-windows.ts       # Window enumeration via PowerShell
+│   ├── config.ts             # Config loading with Zod validation
+│   ├── audit-log.ts          # Tamper-resistant audit logging (JSONL)
+│   ├── save-screenshot.ts    # Screenshot file saving utilities
+│   ├── windows-path.ts       # WSL path → Windows/UNC conversion
+│   ├── powershell-output.ts  # Robust JSON/base64 parsing helpers
+│   └── windows-interop.ts    # Interop error normalization
 ├── scripts/
-│   ├── screenshot.ps1     # Win32 API window capture
-│   └── list-windows.ps1   # Win32 API window enumeration
-├── tests/                 # Vitest test suite
-└── docs/                  # Architecture docs & ADRs
+│   ├── screenshot.ps1        # Win32 API window capture
+│   └── list-windows.ps1      # Win32 API window enumeration
+├── tests/                    # Vitest test suite (68 tests)
+└── docs/                     # Architecture docs, ADRs, changelog
 ```
 
-## Security
+## Troubleshooting
 
-- Input validation on all MCP tool parameters
-- PowerShell argument escaping to prevent injection
-- Optional allowlist to restrict accessible windows
-- No temp files — screenshots are passed as base64 in memory
+### `powershell.exe` fails with `Exec format error`
+
+This indicates WSL Windows interop is disabled in the current session.
+
+1. Run `wsl --shutdown` from **Windows PowerShell/CMD** (not from inside WSL).
+2. Start the distro again (`wsl -d <YourDistro>`).
+3. Re-run `list_windows`/`capture`.
+
+### Quick interop health check
+
+Run inside WSL:
+
+```bash
+test -e /proc/sys/fs/binfmt_misc/WSLInterop && echo WSLInterop_present || echo WSLInterop_missing
+/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'
+```
+
+Expected: `WSLInterop_present` and a PowerShell version string.
 
 ## Acknowledgements
 

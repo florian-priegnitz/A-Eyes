@@ -1,0 +1,5 @@
+{
+	"allowlist": ["Chrome", "VS Code", "Firefox"],
+	"save_screenshots": false,
+	"screenshot_dir": "./screenshots"
+}

@@ -26,8 +26,14 @@ Claude Code  →  MCP Server (TypeScript, runs in WSL2)
 
 ### Security
 
-- By default all windows can be captured
-- Optional allowlist can be configured in `a-eyes.config.json` to restrict which windows are accessible
+- By default **no** windows can be captured (deny-by-default)
+- An allowlist must be configured in `a-eyes.config.json` to enable captures
+- Only windows matching the allowlist patterns are accessible
+- All tool calls are audit-logged to `~/.a-eyes/logs/` (JSONL, daily rotation, always active, no MCP read/delete access)
+
+### Screenshot-Speicherung
+
+Wenn du das `capture`-Tool von A-Eyes nutzt und der User keinen `output_path` angegeben hat, **frage den User**, ob und wohin der Screenshot als Datei gespeichert werden soll. Übergib dann `output_path` an das Tool. Wenn `save_screenshots: true` in der Config steht, werden Screenshots automatisch im konfigurierten Verzeichnis gespeichert — informiere den User über den Speicherort.
 
 ## Tech Stack
 
@@ -53,7 +59,8 @@ a-eyes/
 │   ├── index.ts           # MCP server entry point
 │   ├── server.ts          # MCP server setup & tool definitions
 │   ├── capture.ts         # Screenshot capture logic (calls PowerShell)
-│   └── config.ts          # Config loading (allowlist etc.)
+│   ├── config.ts          # Config loading (allowlist etc.)
+│   └── audit-log.ts       # Tamper-resistant audit logging (JSONL to ~/.a-eyes/logs/)
 ├── scripts/
 │   └── screenshot.ps1     # PowerShell script for Windows screenshot capture
 ├── docs/                  # Central documentation folder

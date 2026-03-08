@@ -1,21 +1,11 @@
 import { execFile } from "node:child_process";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { extractBase64Payload, parseLastJsonLine } from "./powershell-output.js";
+import { formatPowerShellExecutionError } from "./windows-interop.js";
+import { toWindowsPath } from "./windows-path.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
-
-/** Convert a WSL path to a Windows path */
-function toWindowsPath(wslPath: string): string {
-	return wslPath
-		.replace(/\//g, "\\")
-		.replace(/^\\mnt\\(\w)/, (_, drive: string) => `${drive.toUpperCase()}:`);
-}
-
-/** Escape a string for safe use as a PowerShell argument */
-function escapePowerShellArg(value: string): string {
-	// Single-quote the value, escaping any embedded single quotes by doubling them
-	return `'${value.replace(/'/g, "''")}'`;
-}
 
 export interface CaptureResult {
 	base64: string;
@@ -35,7 +25,8 @@ export function captureWindow(windowTitle: string, timeoutMs = 30000): Promise<C
 			"-File",
 			winScriptPath,
 			"-WindowTitle",
-			escapePowerShellArg(windowTitle),
+			// execFile passes argv directly; no shell-style quoting required.
+			windowTitle,
 		];
 
 		const child = execFile(
@@ -52,7 +43,8 @@ export function captureWindow(windowTitle: string, timeoutMs = 30000): Promise<C
 						reject(new Error(`Screenshot capture timed out after ${timeoutMs}ms`));
 						return;
 					}
-					reject(new Error(`Screenshot capture failed: ${stderr || error.message}`));
+					const message = formatPowerShellExecutionError(stderr, error.message);
+					reject(new Error(`Screenshot capture failed: ${message}`));
 					return;
 				}
 
@@ -62,11 +54,18 @@ export function captureWindow(windowTitle: string, timeoutMs = 30000): Promise<C
 					return;
 				}
 
-				// The script outputs JSON with status and data
 				try {
-					const result = JSON.parse(output);
+					const result = parseLastJsonLine(output) as {
+						error?: string;
+						image?: string;
+						title?: string;
+					};
 					if (result.error) {
 						reject(new Error(result.error));
+						return;
+					}
+					if (!result.image) {
+						reject(new Error("Screenshot script output is missing image data"));
 						return;
 					}
 					resolve_({
@@ -74,11 +73,12 @@ export function captureWindow(windowTitle: string, timeoutMs = 30000): Promise<C
 						windowTitle: result.title || windowTitle,
 					});
 				} catch {
-					// If not JSON, treat the whole output as base64 (fallback)
-					resolve_({
-						base64: output,
-						windowTitle,
-					});
+					const base64 = extractBase64Payload(output);
+					if (!base64) {
+						reject(new Error("Failed to parse screenshot output"));
+						return;
+					}
+					resolve_({ base64, windowTitle });
 				}
 			},
 		);

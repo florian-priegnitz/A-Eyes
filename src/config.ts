@@ -4,11 +4,16 @@ import { z } from "zod";
 
 const ConfigSchema = z.object({
 	allowlist: z.array(z.string()).optional(),
+	save_screenshots: z.boolean().default(false),
+	screenshot_dir: z.string().default("./screenshots"),
 });
 
 export type AEyesConfig = z.infer<typeof ConfigSchema>;
 
-const DEFAULT_CONFIG: AEyesConfig = {};
+const DEFAULT_CONFIG: AEyesConfig = {
+	save_screenshots: false,
+	screenshot_dir: "./screenshots",
+};
 
 export async function loadConfig(configPath?: string): Promise<AEyesConfig> {
 	const filePath = configPath ?? resolve(process.cwd(), "a-eyes.config.json");
@@ -30,7 +35,7 @@ export async function loadConfig(configPath?: string): Promise<AEyesConfig> {
 
 export function isWindowAllowed(config: AEyesConfig, windowTitle: string): boolean {
 	if (!config.allowlist || config.allowlist.length === 0) {
-		return true;
+		return false;
 	}
 	const lowerTitle = windowTitle.toLowerCase();
 	return config.allowlist.some((pattern) => lowerTitle.includes(pattern.toLowerCase()));

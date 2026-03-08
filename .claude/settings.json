@@ -1,26 +1,22 @@
 {
-  "permissions": {
-    "allow": [
-      "Bash(pnpm *)",
-      "Bash(node dist/*)",
-      "Bash(powershell.exe *)",
-      "Bash(git status *)",
-      "Bash(git diff *)",
-      "Bash(git log *)",
-      "Bash(git add *)",
-      "Bash(git commit *)",
-      "Bash(git tag *)",
-      "Bash(ls *)",
-      "Bash(mkdir *)",
-      "Bash(echo *)",
-      "Bash(gh issue *)",
-      "Bash(gh label *)",
-      "Bash(gh repo *)"
-    ],
-    "deny": [
-      "Bash(rm -rf /)",
-      "Bash(git push --force*)",
-      "Bash(pnpm publish*)"
-    ]
-  }
+	"permissions": {
+		"allow": [
+			"Bash(pnpm *)",
+			"Bash(node dist/*)",
+			"Bash(powershell.exe *)",
+			"Bash(git status *)",
+			"Bash(git diff *)",
+			"Bash(git log *)",
+			"Bash(git add *)",
+			"Bash(git commit *)",
+			"Bash(git tag *)",
+			"Bash(ls *)",
+			"Bash(mkdir *)",
+			"Bash(echo *)",
+			"Bash(gh issue *)",
+			"Bash(gh label *)",
+			"Bash(gh repo *)"
+		],
+		"deny": ["Bash(rm -rf /)", "Bash(git push --force*)", "Bash(pnpm publish*)"]
+	}
 }

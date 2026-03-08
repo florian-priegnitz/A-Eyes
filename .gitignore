@@ -29,3 +29,6 @@ coverage/
 
 # Temporary files
 *.tmp
+
+# Local config (user-specific allowlist)
+a-eyes.config.json

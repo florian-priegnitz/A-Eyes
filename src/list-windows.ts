@@ -1,15 +1,11 @@
 import { execFile } from "node:child_process";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseLastJsonLine } from "./powershell-output.js";
+import { formatPowerShellExecutionError } from "./windows-interop.js";
+import { toWindowsPath } from "./windows-path.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
-
-/** Convert a WSL path to a Windows path */
-function toWindowsPath(wslPath: string): string {
-	return wslPath
-		.replace(/\//g, "\\")
-		.replace(/^\\mnt\\(\w)/, (_, drive: string) => `${drive.toUpperCase()}:`);
-}
 
 export interface WindowInfo {
 	title: string;
@@ -53,7 +49,8 @@ export function listWindows(timeoutMs = 15000): Promise<ListWindowsResult> {
 						reject(new Error(`Window enumeration timed out after ${timeoutMs}ms`));
 						return;
 					}
-					reject(new Error(`Window enumeration failed: ${stderr || error.message}`));
+					const message = formatPowerShellExecutionError(stderr, error.message);
+					reject(new Error(`Window enumeration failed: ${message}`));
 					return;
 				}
 
@@ -64,7 +61,11 @@ export function listWindows(timeoutMs = 15000): Promise<ListWindowsResult> {
 				}
 
 				try {
-					const result = JSON.parse(output);
+					const result = parseLastJsonLine(output) as {
+						error?: string;
+						windows?: WindowInfo[];
+						count?: number;
+					};
 					if (result.error) {
 						reject(new Error(result.error));
 						return;
