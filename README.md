@@ -4,6 +4,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-18%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![MCP](https://img.shields.io/badge/MCP-Model%20Context%20Protocol-6366F1)](https://modelcontextprotocol.io/)
+[![Platform: Windows + WSL2](https://img.shields.io/badge/platform-Windows%20%2B%20WSL2-0078D4?logo=windows)](https://learn.microsoft.com/en-us/windows/wsl/)
 
 An MCP server that gives [Claude Code](https://docs.anthropic.com/en/docs/claude-code) the ability to capture screenshots of Windows applications through WSL2. The Windows equivalent of [Peekaboo](https://github.com/steipete/Peekaboo) (macOS).
 
@@ -114,6 +115,8 @@ test -e /proc/sys/fs/binfmt_misc/WSLInterop && echo OK || echo MISSING
 ## Author
 
 Built by [Florian Priegnitz](https://linkedin.com/in/florianpriegnitz), Information Security Consultant at SECURAM Consulting, Hamburg. Focus areas: ISO 27001, AI governance, and security tooling. More projects on [GitHub](https://github.com/florian-priegnitz).
+
+Related project: [Compliance Intelligence Dashboard](https://github.com/florian-priegnitz/Compliance-Intelligence-Dashboard) — a DORA/ISO 27001/NIS-2 gap analysis tool with AI-assisted compliance scoring.
 
 ## License
 
