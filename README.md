@@ -6,7 +6,7 @@
 [![MCP](https://img.shields.io/badge/MCP-Model%20Context%20Protocol-6366F1)](https://modelcontextprotocol.io/)
 [![Platform: Windows + WSL2](https://img.shields.io/badge/platform-Windows%20%2B%20WSL2-0078D4?logo=windows)](https://learn.microsoft.com/en-us/windows/wsl/)
 
-An MCP server that gives [Claude Code](https://docs.anthropic.com/en/docs/claude-code) the ability to capture screenshots of Windows applications through WSL2. The Windows equivalent of [Peekaboo](https://github.com/steipete/Peekaboo) (macOS).
+Claude Code can read files and run commands, but it cannot see what is on your screen. A-Eyes closes that gap: it is an MCP server that lets Claude Code capture screenshots of Windows applications through WSL2 — so it can diagnose UI errors, verify layouts, or answer questions about what you are looking at. The Windows equivalent of [Peekaboo](https://github.com/steipete/Peekaboo) (macOS).
 
 ## Security Model
 
