@@ -3,6 +3,7 @@ import { createServer } from "../src/server.js";
 
 const {
 	captureWindowMock,
+	execFileMock,
 	isWindowAllowedMock,
 	listWindowsMock,
 	loadConfigMock,
@@ -11,6 +12,7 @@ const {
 	writeAuditEntryMock,
 } = vi.hoisted(() => ({
 	captureWindowMock: vi.fn(),
+	execFileMock: vi.fn(),
 	listWindowsMock: vi.fn(),
 	loadConfigMock: vi.fn(),
 	isWindowAllowedMock: vi.fn(),
@@ -39,6 +41,10 @@ vi.mock("../src/save-screenshot.js", () => ({
 
 vi.mock("../src/audit-log.js", () => ({
 	writeAuditEntry: writeAuditEntryMock,
+}));
+
+vi.mock("node:child_process", () => ({
+	execFile: execFileMock,
 }));
 
 type ToolHandler = (args: Record<string, unknown>) => Promise<{
@@ -382,5 +388,169 @@ describe("createServer", () => {
 		expect(text).toContain("Found 2 windows:");
 		expect(text).toContain("+ Google Chrome - New Tab");
 		expect(text).toContain("- Mozilla Firefox");
+	});
+
+	it("passes max_width to captureWindow", async () => {
+		loadConfigMock.mockResolvedValue({});
+		isWindowAllowedMock.mockReturnValue(true);
+		captureWindowMock.mockResolvedValue({ base64: "ZmFrZQ==", windowTitle: "Chrome" });
+
+		const server = createServer();
+		const capture = getToolHandler(server, "capture");
+		await capture({ window_title: "Chrome", max_width: 800 });
+
+		expect(captureWindowMock).toHaveBeenCalledWith("Chrome", undefined, 800);
+	});
+
+	it("passes max_width to captureWindow in query tool", async () => {
+		loadConfigMock.mockResolvedValue({});
+		isWindowAllowedMock.mockReturnValue(true);
+		captureWindowMock.mockResolvedValue({ base64: "ZmFrZQ==", windowTitle: "Chrome" });
+
+		const server = createServer();
+		const query = getToolHandler(server, "query");
+		await query({ window_title: "Chrome", question: "What?", max_width: 600 });
+
+		expect(captureWindowMock).toHaveBeenCalledWith("Chrome", undefined, 600);
+	});
+
+	it("check_status reports config, interop, and scripts", async () => {
+		loadConfigMock.mockResolvedValue({ allowlist: ["Chrome", "VS Code", "Firefox"] });
+		execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+			callback(null, "5.1.22621.4391", "");
+		});
+
+		const server = createServer();
+		const checkStatus = getToolHandler(server, "check_status");
+		const result = await checkStatus({});
+		const text = result.content[0]?.text ?? "";
+
+		expect(text).toContain("A-Eyes Status:");
+		expect(text).toContain("Config:      OK (3 windows in allowlist)");
+		expect(text).toContain("Interop:     OK (PowerShell 5.1.22621.4391)");
+		expect(text).toContain("Scripts:     OK");
+	});
+
+	it("check_status shows no-allowlist warning", async () => {
+		loadConfigMock.mockResolvedValue({});
+		execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+			callback(null, "7.4.0", "");
+		});
+
+		const server = createServer();
+		const checkStatus = getToolHandler(server, "check_status");
+		const result = await checkStatus({});
+		const text = result.content[0]?.text ?? "";
+
+		expect(text).toContain("no allowlist — all captures blocked");
+	});
+
+	it("check_status reports interop failure", async () => {
+		loadConfigMock.mockResolvedValue({});
+		execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+			callback(new Error("spawn failed"), "", "Exec format error");
+		});
+
+		const server = createServer();
+		const checkStatus = getToolHandler(server, "check_status");
+		const result = await checkStatus({});
+		const text = result.content[0]?.text ?? "";
+
+		expect(text).toContain("Interop:     FAIL");
+		expect(text).toContain("Exec format error");
+	});
+
+	it("check_status logs audit entry", async () => {
+		loadConfigMock.mockResolvedValue({});
+		execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+			callback(null, "5.1", "");
+		});
+
+		const server = createServer();
+		const checkStatus = getToolHandler(server, "check_status");
+		await checkStatus({});
+
+		expect(writeAuditEntryMock).toHaveBeenCalledTimes(1);
+		const entry = writeAuditEntryMock.mock.calls[0][0];
+		expect(entry.tool).toBe("check_status");
+		expect(entry.result).toBe("success");
+	});
+
+	it("blocks capture when rate limit is exceeded", async () => {
+		loadConfigMock.mockResolvedValue({ max_captures_per_minute: 2 });
+		isWindowAllowedMock.mockReturnValue(true);
+		captureWindowMock.mockResolvedValue({ base64: "ZmFrZQ==", windowTitle: "Chrome" });
+
+		const server = createServer();
+		const capture = getToolHandler(server, "capture");
+
+		// First two should succeed
+		await capture({ window_title: "Chrome" });
+		await capture({ window_title: "Chrome" });
+
+		// Third should be rate limited
+		const result = await capture({ window_title: "Chrome" });
+		expect(result.isError).toBe(true);
+		expect(result.content[0]?.text).toContain("Rate limit exceeded");
+		expect(result.content[0]?.text).toContain("2 captures per minute");
+		expect(captureWindowMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("blocks query when rate limit is exceeded", async () => {
+		loadConfigMock.mockResolvedValue({ max_captures_per_minute: 1 });
+		isWindowAllowedMock.mockReturnValue(true);
+		captureWindowMock.mockResolvedValue({ base64: "ZmFrZQ==", windowTitle: "Chrome" });
+
+		const server = createServer();
+		const capture = getToolHandler(server, "capture");
+		const query = getToolHandler(server, "query");
+
+		await capture({ window_title: "Chrome" });
+		const result = await query({ window_title: "Chrome", question: "What?" });
+
+		expect(result.isError).toBe(true);
+		expect(result.content[0]?.text).toContain("Rate limit exceeded");
+	});
+
+	it("logs rate_limited audit entry", async () => {
+		loadConfigMock.mockResolvedValue({ max_captures_per_minute: 1 });
+		isWindowAllowedMock.mockReturnValue(true);
+		captureWindowMock.mockResolvedValue({ base64: "ZmFrZQ==", windowTitle: "Chrome" });
+
+		const server = createServer();
+		const capture = getToolHandler(server, "capture");
+		await capture({ window_title: "Chrome" });
+		await capture({ window_title: "Chrome" });
+
+		const rateLimitedEntry = writeAuditEntryMock.mock.calls.find(
+			(call) => call[0].result === "rate_limited",
+		);
+		expect(rateLimitedEntry).toBeDefined();
+		expect(rateLimitedEntry[0].tool).toBe("capture");
+	});
+
+	it("does not rate-limit list_windows or check_status", async () => {
+		loadConfigMock.mockResolvedValue({ max_captures_per_minute: 1 });
+		isWindowAllowedMock.mockReturnValue(true);
+		captureWindowMock.mockResolvedValue({ base64: "ZmFrZQ==", windowTitle: "Chrome" });
+		listWindowsMock.mockResolvedValue({ windows: [], count: 0 });
+		execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+			callback(null, "5.1", "");
+		});
+
+		const server = createServer();
+		const capture = getToolHandler(server, "capture");
+		const list = getToolHandler(server, "list_windows");
+		const checkStatus = getToolHandler(server, "check_status");
+
+		// Use up rate limit
+		await capture({ window_title: "Chrome" });
+
+		// These should still work
+		const listResult = await list({});
+		expect(listResult.isError).toBeUndefined();
+
+		const statusResult = await checkStatus({});
+		expect(statusResult.isError).toBeUndefined();
 	});
 });

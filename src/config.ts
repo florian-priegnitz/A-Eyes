@@ -7,6 +7,7 @@ const ConfigSchema = z.object({
 	allowlist: z.array(z.string()).optional(),
 	save_screenshots: z.boolean().default(false),
 	screenshot_dir: z.string().default("./screenshots"),
+	max_captures_per_minute: z.number().int().min(0).default(0),
 });
 
 export type AEyesConfig = z.infer<typeof ConfigSchema>;
@@ -14,6 +15,7 @@ export type AEyesConfig = z.infer<typeof ConfigSchema>;
 const DEFAULT_CONFIG: AEyesConfig = {
 	save_screenshots: false,
 	screenshot_dir: "./screenshots",
+	max_captures_per_minute: 0,
 };
 
 async function tryReadConfig(filePath: string): Promise<AEyesConfig | null> {

@@ -12,7 +12,11 @@ export interface CaptureResult {
 	windowTitle: string;
 }
 
-export function captureWindow(windowTitle: string, timeoutMs = 30000): Promise<CaptureResult> {
+export function captureWindow(
+	windowTitle: string,
+	timeoutMs = 30000,
+	maxWidth?: number,
+): Promise<CaptureResult> {
 	return new Promise((resolve_, reject) => {
 		const scriptPath = resolve(__dirname, "..", "scripts", "screenshot.ps1");
 		const winScriptPath = toWindowsPath(scriptPath);
@@ -28,6 +32,10 @@ export function captureWindow(windowTitle: string, timeoutMs = 30000): Promise<C
 			// execFile passes argv directly; no shell-style quoting required.
 			windowTitle,
 		];
+
+		if (maxWidth !== undefined) {
+			args.push("-MaxWidth", String(maxWidth));
+		}
 
 		const child = execFile(
 			"powershell.exe",

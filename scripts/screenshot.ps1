@@ -1,6 +1,9 @@
 param(
     [Parameter(Mandatory=$true)]
-    [string]$WindowTitle
+    [string]$WindowTitle,
+
+    [Parameter(Mandatory=$false)]
+    [int]$MaxWidth = 0
 )
 
 # Ensure errors produce clean JSON output
@@ -125,6 +128,21 @@ try {
         Start-Sleep -Milliseconds 100
 
         $graphics.CopyFromScreen($rect.Left, $rect.Top, 0, 0, [System.Drawing.Size]::new($width, $height))
+    }
+
+    # Resize if MaxWidth is set and image is wider
+    if ($MaxWidth -gt 0 -and $width -gt $MaxWidth) {
+        $ratio = $MaxWidth / $width
+        $newHeight = [int]($height * $ratio)
+        $resized = New-Object System.Drawing.Bitmap($MaxWidth, $newHeight)
+        $resizeGraphics = [System.Drawing.Graphics]::FromImage($resized)
+        $resizeGraphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+        $resizeGraphics.DrawImage($bitmap, 0, 0, $MaxWidth, $newHeight)
+        $resizeGraphics.Dispose()
+        $bitmap.Dispose()
+        $bitmap = $resized
+        $width = $MaxWidth
+        $height = $newHeight
     }
 
     # Convert to PNG and base64

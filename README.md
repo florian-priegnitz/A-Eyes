@@ -38,9 +38,10 @@ The server runs inside WSL2 and calls Windows PowerShell scripts through WSL int
 
 | Tool | Description |
 |------|-------------|
-| `capture` | Screenshot a window by title. Optionally save to disk via `output_path`. |
+| `capture` | Screenshot a window by title. Optionally save to disk via `output_path`. Supports `max_width` for resize. |
 | `list_windows` | List all visible windows. Shows `+`/`-` markers for capturable vs. blocked. |
-| `query` | Capture a screenshot and forward a question about its content to Claude. |
+| `query` | Capture a screenshot and forward a question about its content to Claude. Supports `max_width`. |
+| `check_status` | Health check: verifies config, WSL interop, and script availability. |
 
 ## Installation & Quickstart
 
@@ -92,6 +93,7 @@ A-Eyes searches for config in order: `./a-eyes.config.json` (project) → `~/.a-
 | `allowlist` | `[]` | Window title substrings that are allowed for capture. Empty = all blocked. |
 | `save_screenshots` | `false` | Auto-save every capture to `screenshot_dir`. |
 | `screenshot_dir` | `"./screenshots"` | Target directory for auto-saved PNGs. |
+| `max_captures_per_minute` | `0` | Rate limit for `capture`/`query` calls. 0 = unlimited. |
 
 ## Testing
 

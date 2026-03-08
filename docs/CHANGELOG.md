@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `max_width` parameter for `capture` and `query` tools — proportionally scales down wider screenshots via GDI+ in PowerShell, reducing base64 payload size
+- `check_status` MCP tool — reports config, WSL interop, and script availability for quick health diagnostics
+- Rate limiting: configurable `max_captures_per_minute` in config (default: 0 = unlimited). Applies to `capture` and `query` tools only
+- New `src/rate-limiter.ts` module with sliding-window rate limiter
+- Unit tests for rate limiter (6 tests), capture max_width forwarding (2 tests), check_status (4 tests), and rate limit integration (4 tests)
+
+### Changed
+- `scripts/screenshot.ps1` accepts optional `-MaxWidth` parameter for server-side image resize
+- `src/capture.ts` accepts optional `maxWidth` parameter, forwarded as PowerShell arg
+- Audit log types extended: `tool` includes `"check_status"`, `result` includes `"rate_limited"`
+- Config schema extended with `max_captures_per_minute` field (backward-compatible default: 0)
+
+### Added
 - Tamper-resistant audit logging to `~/.a-eyes/logs/` — all tool calls (capture, query, list_windows) are logged as JSONL with timestamp, params, result, and duration
 - New `src/audit-log.ts` module with `getAuditLogPath()` and `writeAuditEntry()` functions
 - Unit tests for audit-log module and audit logging integration in server tests

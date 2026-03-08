@@ -1,10 +1,17 @@
+import { execFile } from "node:child_process";
+import { constants, access } from "node:fs/promises";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { writeAuditEntry } from "./audit-log.js";
 import { captureWindow } from "./capture.js";
 import { type AEyesConfig, isWindowAllowed, loadConfig } from "./config.js";
 import { listWindows } from "./list-windows.js";
+import { RateLimiter } from "./rate-limiter.js";
 import { resolveOutputPath, saveScreenshot } from "./save-screenshot.js";
+
+const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
 export function createServer(): McpServer {
 	const server = new McpServer({
@@ -12,9 +19,14 @@ export function createServer(): McpServer {
 		version: "0.1.0",
 	});
 
-	let config: AEyesConfig = { save_screenshots: false, screenshot_dir: "./screenshots" };
+	let config: AEyesConfig = {
+		save_screenshots: false,
+		screenshot_dir: "./screenshots",
+		max_captures_per_minute: 0,
+	};
 	let configLoaded = false;
 	let configLoadPromise: Promise<AEyesConfig> | null = null;
+	let rateLimiter = new RateLimiter(0);
 
 	async function ensureConfig(): Promise<AEyesConfig> {
 		if (configLoaded) {
@@ -28,6 +40,7 @@ export function createServer(): McpServer {
 		try {
 			config = await configLoadPromise;
 			configLoaded = true;
+			rateLimiter = new RateLimiter(config.max_captures_per_minute ?? 0);
 			return config;
 		} finally {
 			configLoadPromise = null;
@@ -44,8 +57,16 @@ export function createServer(): McpServer {
 				.string()
 				.optional()
 				.describe("Optional file path or directory to save the screenshot PNG to"),
+			max_width: z
+				.number()
+				.int()
+				.positive()
+				.optional()
+				.describe(
+					"Maximum image width in pixels. If set, wider screenshots are proportionally scaled down.",
+				),
 		},
-		async ({ window_title, output_path }) => {
+		async ({ window_title, output_path, max_width }) => {
 			const startTime = Date.now();
 			const cfg = await ensureConfig();
 
@@ -68,8 +89,26 @@ export function createServer(): McpServer {
 				};
 			}
 
+			if (!rateLimiter.isAllowed()) {
+				const retryAfter = rateLimiter.retryAfterSeconds();
+				const message = `Rate limit exceeded: maximum ${cfg.max_captures_per_minute} captures per minute. Try again in ${retryAfter} seconds.`;
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "capture",
+					params: { window_title },
+					result: "rate_limited",
+					duration_ms: Date.now() - startTime,
+					error: message,
+				}).catch((err) => console.error("Audit log error:", err));
+				return {
+					content: [{ type: "text", text: message }],
+					isError: true,
+				};
+			}
+
 			try {
-				const result = await captureWindow(window_title);
+				rateLimiter.record();
+				const result = await captureWindow(window_title, undefined, max_width);
 
 				// Determine if/where to save
 				let savedPath: string | undefined;
@@ -194,8 +233,16 @@ export function createServer(): McpServer {
 		{
 			window_title: z.string().describe("The window title or app name to capture"),
 			question: z.string().describe("Question to answer about the screenshot content"),
+			max_width: z
+				.number()
+				.int()
+				.positive()
+				.optional()
+				.describe(
+					"Maximum image width in pixels. If set, wider screenshots are proportionally scaled down.",
+				),
 		},
-		async ({ window_title, question }) => {
+		async ({ window_title, question, max_width }) => {
 			const startTime = Date.now();
 			const cfg = await ensureConfig();
 
@@ -218,8 +265,26 @@ export function createServer(): McpServer {
 				};
 			}
 
+			if (!rateLimiter.isAllowed()) {
+				const retryAfter = rateLimiter.retryAfterSeconds();
+				const message = `Rate limit exceeded: maximum ${cfg.max_captures_per_minute} captures per minute. Try again in ${retryAfter} seconds.`;
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "query",
+					params: { window_title, question },
+					result: "rate_limited",
+					duration_ms: Date.now() - startTime,
+					error: message,
+				}).catch((err) => console.error("Audit log error:", err));
+				return {
+					content: [{ type: "text", text: message }],
+					isError: true,
+				};
+			}
+
 			try {
-				const result = await captureWindow(window_title);
+				rateLimiter.record();
+				const result = await captureWindow(window_title, undefined, max_width);
 				writeAuditEntry({
 					timestamp: new Date(startTime).toISOString(),
 					tool: "query",
@@ -260,6 +325,93 @@ export function createServer(): McpServer {
 					isError: true,
 				};
 			}
+		},
+	);
+
+	// --- check_status tool ---
+	server.tool(
+		"check_status",
+		"Check A-Eyes health: config, WSL interop, and script availability",
+		{},
+		async () => {
+			const startTime = Date.now();
+			const lines: string[] = ["A-Eyes Status:"];
+
+			// 1. Config check
+			let cfg: AEyesConfig;
+			try {
+				cfg = await ensureConfig();
+				const allowlistCount = cfg.allowlist?.length ?? 0;
+				const allowlistInfo =
+					allowlistCount > 0
+						? `${allowlistCount} window${allowlistCount > 1 ? "s" : ""} in allowlist`
+						: "no allowlist — all captures blocked";
+				lines.push(`  Config:      OK (${allowlistInfo})`);
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				lines.push(`  Config:      FAIL (${msg})`);
+				cfg = {
+					save_screenshots: false,
+					screenshot_dir: "./screenshots",
+					max_captures_per_minute: 0,
+				};
+			}
+
+			// 2. WSL interop check
+			try {
+				const psVersion = await new Promise<string>((resolvePs, rejectPs) => {
+					execFile(
+						"powershell.exe",
+						["-NoProfile", "-Command", "Write-Output $PSVersionTable.PSVersion.ToString()"],
+						{ timeout: 10_000 },
+						(error, stdout, stderr) => {
+							if (error) {
+								const stderrMsg = stderr.trim();
+								if (stderrMsg.includes("Exec format error")) {
+									rejectPs(new Error('Exec format error — run "wsl --shutdown" and restart'));
+								} else {
+									rejectPs(error);
+								}
+								return;
+							}
+							resolvePs(stdout.trim());
+						},
+					);
+				});
+				lines.push(`  Interop:     OK (PowerShell ${psVersion})`);
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				lines.push(`  Interop:     FAIL (${msg})`);
+			}
+
+			// 3. Script availability check
+			const scriptsDir = resolve(__dirname, "..", "scripts");
+			const scriptNames = ["screenshot.ps1", "list-windows.ps1"];
+			const missing: string[] = [];
+			for (const name of scriptNames) {
+				try {
+					await access(resolve(scriptsDir, name), constants.R_OK);
+				} catch {
+					missing.push(name);
+				}
+			}
+			if (missing.length === 0) {
+				lines.push(`  Scripts:     OK (${scriptNames.join(", ")})`);
+			} else {
+				lines.push(`  Scripts:     FAIL (missing: ${missing.join(", ")})`);
+			}
+
+			writeAuditEntry({
+				timestamp: new Date(startTime).toISOString(),
+				tool: "check_status",
+				params: {},
+				result: "success",
+				duration_ms: Date.now() - startTime,
+			}).catch((err) => console.error("Audit log error:", err));
+
+			return {
+				content: [{ type: "text", text: lines.join("\n") }],
+			};
 		},
 	);
 

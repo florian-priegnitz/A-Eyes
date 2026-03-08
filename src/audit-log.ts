@@ -4,9 +4,9 @@ import { join } from "node:path";
 
 export interface AuditEntry {
 	timestamp: string;
-	tool: "capture" | "query" | "list_windows";
+	tool: "capture" | "query" | "list_windows" | "check_status";
 	params: Record<string, unknown>;
-	result: "success" | "blocked" | "error";
+	result: "success" | "blocked" | "error" | "rate_limited";
 	duration_ms: number;
 	windows_count?: number;
 	error?: string;

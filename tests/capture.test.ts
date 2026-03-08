@@ -81,6 +81,34 @@ describe("capture module", () => {
 		expect(result).toEqual({ base64: "ZmFrZQ==", windowTitle: "Chrome" });
 	});
 
+	it("passes max_width as -MaxWidth PowerShell argument", async () => {
+		execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+			callback(null, '{"image":"ZmFrZQ==","title":"Chrome"}', "");
+			return { stdin: { end: vi.fn() } };
+		});
+
+		const { captureWindow } = await import("../src/capture.js");
+		await captureWindow("Chrome", undefined, 800);
+
+		const args = execFileMock.mock.calls[0][1] as string[];
+		const maxWidthIndex = args.indexOf("-MaxWidth");
+		expect(maxWidthIndex).toBeGreaterThan(-1);
+		expect(args[maxWidthIndex + 1]).toBe("800");
+	});
+
+	it("does not pass -MaxWidth when maxWidth is not set", async () => {
+		execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+			callback(null, '{"image":"ZmFrZQ==","title":"Chrome"}', "");
+			return { stdin: { end: vi.fn() } };
+		});
+
+		const { captureWindow } = await import("../src/capture.js");
+		await captureWindow("Chrome");
+
+		const args = execFileMock.mock.calls[0][1] as string[];
+		expect(args).not.toContain("-MaxWidth");
+	});
+
 	it("rejects when output is neither JSON nor base64", async () => {
 		execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
 			callback(null, "unexpected-output", "");
