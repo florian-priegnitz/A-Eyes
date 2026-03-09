@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `setup` MCP tool — interactive first-run setup with preview/write modes: shows open windows and config status (preview), or writes `~/.a-eyes/config.json` with a given allowlist (write)
+- New `src/setup.ts` module with `detectExistingConfig()` and `writeConfig()` functions
+- Unit tests for setup module and setup tool integration in server tests
+
+### Changed
+- Error messages in `capture` and `query` tools now suggest using the `setup` tool when no allowlist is configured
+- Audit log `tool` type extended with `"setup"`
+
+### Fixed
+- Config search chain now includes package root (`__dirname/..`) as fallback between cwd and home — fixes "no allowlist" errors when MCP runner's `process.cwd()` doesn't match the configured `cwd` in `.mcp.json`
+
+### Added
 - `max_width` parameter for `capture` and `query` tools — proportionally scales down wider screenshots via GDI+ in PowerShell, reducing base64 payload size
 - `check_status` MCP tool — reports config, WSL interop, and script availability for quick health diagnostics
 - Rate limiting: configurable `max_captures_per_minute` in config (default: 0 = unlimited). Applies to `capture` and `query` tools only

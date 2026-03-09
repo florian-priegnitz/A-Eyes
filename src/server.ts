@@ -10,6 +10,7 @@ import { type AEyesConfig, isWindowAllowed, loadConfig } from "./config.js";
 import { listWindows } from "./list-windows.js";
 import { RateLimiter } from "./rate-limiter.js";
 import { resolveOutputPath, saveScreenshot } from "./save-screenshot.js";
+import { detectExistingConfig, writeConfig } from "./setup.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
@@ -73,7 +74,7 @@ export function createServer(): McpServer {
 			if (!isWindowAllowed(cfg, window_title)) {
 				const message =
 					!cfg.allowlist || cfg.allowlist.length === 0
-						? "No allowlist configured. Add an allowlist to a-eyes.config.json to enable captures."
+						? "No allowlist configured. Use the setup tool to create one, or add an allowlist manually to a-eyes.config.json."
 						: `Window "${window_title}" is not in the allowlist. Allowed windows: ${cfg.allowlist.join(", ")}`;
 				writeAuditEntry({
 					timestamp: new Date(startTime).toISOString(),
@@ -249,7 +250,7 @@ export function createServer(): McpServer {
 			if (!isWindowAllowed(cfg, window_title)) {
 				const message =
 					!cfg.allowlist || cfg.allowlist.length === 0
-						? "No allowlist configured. Add an allowlist to a-eyes.config.json to enable captures."
+						? "No allowlist configured. Use the setup tool to create one, or add an allowlist manually to a-eyes.config.json."
 						: `Window "${window_title}" is not in the allowlist. Allowed windows: ${cfg.allowlist.join(", ")}`;
 				writeAuditEntry({
 					timestamp: new Date(startTime).toISOString(),
@@ -412,6 +413,132 @@ export function createServer(): McpServer {
 			return {
 				content: [{ type: "text", text: lines.join("\n") }],
 			};
+		},
+	);
+
+	// --- setup tool ---
+	server.tool(
+		"setup",
+		"Interactive setup: preview open windows and create an allowlist config. Call without parameters to preview, or with an allowlist to write the config.",
+		{
+			allowlist: z
+				.array(z.string())
+				.optional()
+				.describe(
+					"Window title patterns to allow for capture. Omit to preview current windows and config status.",
+				),
+		},
+		async ({ allowlist }) => {
+			const startTime = Date.now();
+
+			if (!allowlist) {
+				// Preview mode: show windows + config status
+				const configStatus = await detectExistingConfig();
+				const lines: string[] = ["A-Eyes Setup\n"];
+
+				// Config status
+				if (configStatus.found) {
+					lines.push(`Config found: ${configStatus.path} (${configStatus.source})`);
+					if (configStatus.hasAllowlist) {
+						lines.push(`Current allowlist: ${configStatus.allowlist.join(", ")}`);
+					} else {
+						lines.push("Config exists but has no allowlist — all captures are blocked.");
+					}
+				} else {
+					lines.push("No config file found. All captures are currently blocked.");
+				}
+
+				lines.push("");
+
+				// Window list
+				try {
+					const result = await listWindows();
+					lines.push(`Open windows (${result.count}):\n`);
+					for (const w of result.windows) {
+						lines.push(`  - ${w.title} [${w.processName}]${w.minimized ? " (minimized)" : ""}`);
+					}
+				} catch (err) {
+					const msg = err instanceof Error ? err.message : String(err);
+					lines.push(`Could not list windows: ${msg}`);
+				}
+
+				lines.push("");
+				lines.push("To create a config, call setup again with an allowlist, e.g.:");
+				lines.push('  setup(allowlist: ["Chrome", "VS Code"])');
+
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "setup",
+					params: {},
+					result: "success",
+					duration_ms: Date.now() - startTime,
+				}).catch((err) => console.error("Audit log error:", err));
+
+				return {
+					content: [{ type: "text", text: lines.join("\n") }],
+				};
+			}
+
+			// Write mode: create config
+			if (allowlist.length === 0) {
+				const message = "Allowlist cannot be empty. Provide at least one window title pattern.";
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "setup",
+					params: { allowlist },
+					result: "error",
+					duration_ms: Date.now() - startTime,
+					error: message,
+				}).catch((err) => console.error("Audit log error:", err));
+				return {
+					content: [{ type: "text", text: message }],
+					isError: true,
+				};
+			}
+
+			try {
+				const configPath = await writeConfig(allowlist);
+
+				// Force config reload on next tool call
+				configLoaded = false;
+				configLoadPromise = null;
+
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "setup",
+					params: { allowlist },
+					result: "success",
+					duration_ms: Date.now() - startTime,
+				}).catch((err) => console.error("Audit log error:", err));
+
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Config written to ${configPath}\nAllowlist: ${allowlist.join(", ")}\n\nYou can now capture screenshots of windows matching these patterns.`,
+						},
+					],
+				};
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "setup",
+					params: { allowlist },
+					result: "error",
+					duration_ms: Date.now() - startTime,
+					error: message,
+				}).catch((auditErr) => console.error("Audit log error:", auditErr));
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Failed to write config: ${message}`,
+						},
+					],
+					isError: true,
+				};
+			}
 		},
 	);
 

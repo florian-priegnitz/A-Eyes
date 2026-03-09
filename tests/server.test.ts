@@ -3,6 +3,7 @@ import { createServer } from "../src/server.js";
 
 const {
 	captureWindowMock,
+	detectExistingConfigMock,
 	execFileMock,
 	isWindowAllowedMock,
 	listWindowsMock,
@@ -10,8 +11,10 @@ const {
 	resolveOutputPathMock,
 	saveScreenshotMock,
 	writeAuditEntryMock,
+	writeConfigMock,
 } = vi.hoisted(() => ({
 	captureWindowMock: vi.fn(),
+	detectExistingConfigMock: vi.fn(),
 	execFileMock: vi.fn(),
 	listWindowsMock: vi.fn(),
 	loadConfigMock: vi.fn(),
@@ -19,6 +22,7 @@ const {
 	resolveOutputPathMock: vi.fn(),
 	saveScreenshotMock: vi.fn(),
 	writeAuditEntryMock: vi.fn(),
+	writeConfigMock: vi.fn(),
 }));
 
 vi.mock("../src/capture.js", () => ({
@@ -41,6 +45,11 @@ vi.mock("../src/save-screenshot.js", () => ({
 
 vi.mock("../src/audit-log.js", () => ({
 	writeAuditEntry: writeAuditEntryMock,
+}));
+
+vi.mock("../src/setup.js", () => ({
+	detectExistingConfig: detectExistingConfigMock,
+	writeConfig: writeConfigMock,
 }));
 
 vi.mock("node:child_process", () => ({
@@ -149,7 +158,7 @@ describe("createServer", () => {
 
 		expect(result.isError).toBe(true);
 		expect(result.content[0]?.text).toContain("No allowlist configured");
-		expect(result.content[0]?.text).toContain("a-eyes.config.json");
+		expect(result.content[0]?.text).toContain("setup tool");
 		expect(captureWindowMock).not.toHaveBeenCalled();
 	});
 
@@ -552,5 +561,137 @@ describe("createServer", () => {
 
 		const statusResult = await checkStatus({});
 		expect(statusResult.isError).toBeUndefined();
+	});
+
+	// --- setup tool tests ---
+
+	it("setup preview shows windows and config status when no config exists", async () => {
+		detectExistingConfigMock.mockResolvedValue({
+			found: false,
+			path: null,
+			source: null,
+			hasAllowlist: false,
+			allowlist: [],
+		});
+		listWindowsMock.mockResolvedValue({
+			windows: [
+				{
+					title: "Chrome",
+					processName: "chrome",
+					processId: 1,
+					width: 1200,
+					height: 800,
+					minimized: false,
+				},
+				{
+					title: "VS Code",
+					processName: "code",
+					processId: 2,
+					width: 1400,
+					height: 900,
+					minimized: false,
+				},
+			],
+			count: 2,
+		});
+
+		const server = createServer();
+		const setup = getToolHandler(server, "setup");
+		const result = await setup({});
+		const text = result.content[0]?.text ?? "";
+
+		expect(text).toContain("No config file found");
+		expect(text).toContain("Chrome");
+		expect(text).toContain("VS Code");
+		expect(text).toContain("Open windows (2)");
+		expect(result.isError).toBeUndefined();
+	});
+
+	it("setup preview shows existing config with allowlist", async () => {
+		detectExistingConfigMock.mockResolvedValue({
+			found: true,
+			path: "/home/user/.a-eyes/config.json",
+			source: "home",
+			hasAllowlist: true,
+			allowlist: ["Chrome"],
+		});
+		listWindowsMock.mockResolvedValue({ windows: [], count: 0 });
+
+		const server = createServer();
+		const setup = getToolHandler(server, "setup");
+		const result = await setup({});
+		const text = result.content[0]?.text ?? "";
+
+		expect(text).toContain("Config found:");
+		expect(text).toContain("Current allowlist: Chrome");
+	});
+
+	it("setup write creates config and forces reload", async () => {
+		writeConfigMock.mockResolvedValue("/home/user/.a-eyes/config.json");
+		loadConfigMock.mockResolvedValue({ allowlist: ["Chrome"] });
+		isWindowAllowedMock.mockReturnValue(true);
+		captureWindowMock.mockResolvedValue({ base64: "ZmFrZQ==", windowTitle: "Chrome" });
+
+		const server = createServer();
+		const setup = getToolHandler(server, "setup");
+		const capture = getToolHandler(server, "capture");
+
+		// Load config initially
+		await capture({ window_title: "Chrome" });
+		expect(loadConfigMock).toHaveBeenCalledTimes(1);
+
+		// Write new config via setup
+		const result = await setup({ allowlist: ["Chrome", "VS Code"] });
+		const text = result.content[0]?.text ?? "";
+
+		expect(text).toContain("Config written to");
+		expect(text).toContain("Chrome, VS Code");
+		expect(writeConfigMock).toHaveBeenCalledWith(["Chrome", "VS Code"]);
+		expect(result.isError).toBeUndefined();
+
+		// Next capture should reload config
+		await capture({ window_title: "Chrome" });
+		expect(loadConfigMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("setup write rejects empty allowlist", async () => {
+		const server = createServer();
+		const setup = getToolHandler(server, "setup");
+		const result = await setup({ allowlist: [] });
+
+		expect(result.isError).toBe(true);
+		expect(result.content[0]?.text).toContain("cannot be empty");
+		expect(writeConfigMock).not.toHaveBeenCalled();
+	});
+
+	it("setup write handles write errors", async () => {
+		writeConfigMock.mockRejectedValue(new Error("Permission denied"));
+
+		const server = createServer();
+		const setup = getToolHandler(server, "setup");
+		const result = await setup({ allowlist: ["Chrome"] });
+
+		expect(result.isError).toBe(true);
+		expect(result.content[0]?.text).toContain("Failed to write config");
+		expect(result.content[0]?.text).toContain("Permission denied");
+	});
+
+	it("setup logs audit entry", async () => {
+		detectExistingConfigMock.mockResolvedValue({
+			found: false,
+			path: null,
+			source: null,
+			hasAllowlist: false,
+			allowlist: [],
+		});
+		listWindowsMock.mockResolvedValue({ windows: [], count: 0 });
+
+		const server = createServer();
+		const setup = getToolHandler(server, "setup");
+		await setup({});
+
+		const setupEntry = writeAuditEntryMock.mock.calls.find((call) => call[0].tool === "setup");
+		expect(setupEntry).toBeDefined();
+		expect(setupEntry[0].result).toBe("success");
 	});
 });

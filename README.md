@@ -47,34 +47,59 @@ The server runs inside WSL2 and calls Windows PowerShell scripts through WSL int
 
 **Requirements:** WSL2 on Windows 10/11, Node.js 18+, pnpm
 
+### 1. Clone and build
+
 ```bash
 git clone https://github.com/florian-priegnitz/a-eyes.git
 cd a-eyes
 pnpm install && pnpm build
 ```
 
-Register as MCP server in `~/.claude/settings.json`:
+### 2. Register as MCP server
+
+Add a `.mcp.json` file to the **root of the project where you want to use A-Eyes** (not in the a-eyes directory itself):
+
+**Option A — CLI (recommended):**
+
+```bash
+cd /path/to/your-project
+claude mcp add a-eyes -s project -- node /path/to/a-eyes/dist/index.js
+```
+
+**Option B — Manual `.mcp.json`:**
+
+Create `.mcp.json` in your project root:
 
 ```json
 {
   "mcpServers": {
     "a-eyes": {
+      "type": "stdio",
       "command": "node",
-      "args": ["dist/index.js"],
+      "args": ["/path/to/a-eyes/dist/index.js"],
       "cwd": "/path/to/a-eyes"
     }
   }
 }
 ```
 
-Create an allowlist (without this, all captures are blocked):
+> **Important:** Use WSL paths (`/mnt/c/...`), not Windows paths (`C:\...`). The `cwd` field ensures the server finds its PowerShell scripts.
+
+### 3. Configure allowlist
+
+Without this, all captures are blocked:
 
 ```bash
+cd /path/to/a-eyes
 cp a-eyes.config.example.json a-eyes.config.json
 # Edit the allowlist to match your environment
 ```
 
-Then in Claude Code: *"Take a screenshot of Chrome"* or *"What windows are open?"*
+### 4. Restart and verify
+
+Restart Claude Code, then check `/mcp` → "Manage MCP servers" — A-Eyes should show `connected` with 4 tools.
+
+Then try: *"Take a screenshot of Chrome"* or *"What windows are open?"*
 
 ## Configuration
 

@@ -1,7 +1,10 @@
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
+
+const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
 const ConfigSchema = z.object({
 	allowlist: z.array(z.string()).optional(),
@@ -42,10 +45,17 @@ export async function loadConfig(configPath?: string): Promise<AEyesConfig> {
 		return result ?? DEFAULT_CONFIG;
 	}
 
-	// Search chain: cwd → ~/.a-eyes/config.json → defaults
+	// Search chain: cwd → package root → ~/.a-eyes/config.json → defaults
 	const cwdConfig = resolve(process.cwd(), "a-eyes.config.json");
 	const cwdResult = await tryReadConfig(cwdConfig);
 	if (cwdResult) return cwdResult;
+
+	// Package root: one level up from dist/ (where compiled JS lives)
+	const pkgConfig = resolve(__dirname, "..", "a-eyes.config.json");
+	if (pkgConfig !== cwdConfig) {
+		const pkgResult = await tryReadConfig(pkgConfig);
+		if (pkgResult) return pkgResult;
+	}
 
 	const homeConfig = join(homedir(), ".a-eyes", "config.json");
 	const homeResult = await tryReadConfig(homeConfig);

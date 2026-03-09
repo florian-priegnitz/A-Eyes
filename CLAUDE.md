@@ -111,14 +111,22 @@ pnpm lint:fix          # Biome auto-fix
 
 ### Claude Code MCP Config
 
-Add to Claude Code settings (`~/.claude/settings.json`):
+Register A-Eyes in the target project via `.mcp.json` (not `settings.json`):
+
+```bash
+cd /path/to/your-project
+claude mcp add a-eyes -s project -- node /path/to/a-eyes/dist/index.js
+```
+
+Or create `.mcp.json` manually in the target project root:
 ```json
 {
   "mcpServers": {
     "a-eyes": {
+      "type": "stdio",
       "command": "node",
-      "args": ["dist/index.js"],
-      "cwd": "/mnt/d/Programmieren/a-eyes"
+      "args": ["/path/to/a-eyes/dist/index.js"],
+      "cwd": "/path/to/a-eyes"
     }
   }
 }

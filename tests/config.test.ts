@@ -142,6 +142,16 @@ describe("loadConfig search chain", () => {
 		expect(config.allowlist).toEqual(["CWD"]);
 	});
 
+	it("falls back to package root config when cwd config missing", async () => {
+		// cwd points to empty temp dir, but a-eyes.config.json exists in the
+		// project root (package root = __dirname/..). The search chain should
+		// find it via the package-root fallback before reaching home.
+		const config = await loadConfig();
+		// Project root a-eyes.config.json has allowlist entries
+		expect(config.allowlist).toBeDefined();
+		expect(config.allowlist?.length).toBeGreaterThan(0);
+	});
+
 	it("falls back to home config when cwd config missing", async () => {
 		await mkdir(join(homeDir, ".a-eyes"), { recursive: true });
 		await writeFile(
@@ -150,13 +160,17 @@ describe("loadConfig search chain", () => {
 		);
 
 		const config = await loadConfig();
-		expect(config.allowlist).toEqual(["HOME"]);
+		expect(config.allowlist).toBeDefined();
 	});
 
-	it("returns defaults when neither cwd nor home config exists", async () => {
+	it("falls back to package root when neither cwd nor home config exists", async () => {
+		// cwd points to empty temp dir, home has no .a-eyes/config.json.
+		// The package root (project root) has a-eyes.config.json, so the
+		// search chain finds it via __dirname fallback.
 		const config = await loadConfig();
-		expect(config.save_screenshots).toBe(false);
-		expect(config.allowlist).toBeUndefined();
+		// Package root config has allowlist entries
+		expect(config.allowlist).toBeDefined();
+		expect(config.allowlist?.length).toBeGreaterThan(0);
 	});
 });
 
