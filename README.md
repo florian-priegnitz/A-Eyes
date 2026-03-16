@@ -14,7 +14,7 @@ A-Eyes treats screenshot access as a security-sensitive operation. The design as
 
 **Deny-by-default access control.** Without an explicit allowlist in `a-eyes.config.json`, every capture request is blocked. There is no "capture everything" mode. The operator decides which windows are accessible — the AI agent cannot override this.
 
-**Tamper-resistant audit logging.** Every tool invocation (capture, query, list_windows) is logged to `~/.a-eyes/logs/audit-YYYY-MM-DD.jsonl` — append-only, daily rotation. There is no MCP tool to read, modify, or delete these logs. The AI agent can only access them through filesystem tools that the operator can deny at the permission prompt. Each log entry records timestamp, tool name, parameters, result status, and execution duration.
+**Tamper-resistant audit logging.** Every tool invocation (capture, query, list_windows, see, check_status, setup) is logged to `~/.a-eyes/logs/audit-YYYY-MM-DD.jsonl` — append-only, daily rotation. There is no MCP tool to read, modify, or delete these logs. The AI agent can only access them through filesystem tools that the operator can deny at the permission prompt. Each log entry records timestamp, tool name, parameters, result status, and execution duration.
 
 **No shell interpolation.** Window titles are passed as `execFile` argv arrays, never interpolated into shell command strings. This eliminates command injection through crafted window titles — a realistic attack vector when an AI agent chooses which windows to capture.
 
@@ -29,7 +29,7 @@ Claude Code  ──MCP/stdio──►  A-Eyes Server (TypeScript, WSL2)
                                     │
                               Win32 API (FindWindow, PrintWindow)
                                     │
-                              PNG ──base64──► returned to Claude Code
+                              PNG/JPEG or UI element tree ──base64/text──► returned to Claude Code
 ```
 
 The server runs inside WSL2 and calls Windows PowerShell scripts through WSL interop. Screenshots never touch the filesystem unless explicitly configured — they are returned as base64-encoded PNG data over the MCP stdio transport.
