@@ -1,18 +1,14 @@
-import { execFile } from "node:child_process";
-import { constants, access } from "node:fs/promises";
-import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { writeAuditEntry } from "./audit-log.js";
 import { captureWindow } from "./capture.js";
 import { type AEyesConfig, isWindowAllowed, loadConfig } from "./config.js";
+import { runHealthCheck } from "./health-check.js";
 import { listWindows } from "./list-windows.js";
 import { RateLimiter } from "./rate-limiter.js";
 import { resolveOutputPath, saveScreenshot } from "./save-screenshot.js";
+import { seeWindow } from "./see.js";
 import { detectExistingConfig, writeConfig } from "./setup.js";
-
-const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
 export function createServer(): McpServer {
 	const server = new McpServer({
@@ -53,7 +49,13 @@ export function createServer(): McpServer {
 		"capture",
 		"Capture a screenshot of a window by title or app name",
 		{
-			window_title: z.string().describe("The window title or app name to capture"),
+			window_title: z.string().optional().describe("The window title or app name to capture"),
+			process_name: z
+				.string()
+				.optional()
+				.describe(
+					"The process name to capture (e.g. 'chrome', 'Unity'). More stable than window titles which change dynamically.",
+				),
 			output_path: z
 				.string()
 				.optional()
@@ -66,20 +68,59 @@ export function createServer(): McpServer {
 				.describe(
 					"Maximum image width in pixels. If set, wider screenshots are proportionally scaled down.",
 				),
+			crop: z
+				.object({
+					x: z.number().int().nonnegative(),
+					y: z.number().int().nonnegative(),
+					width: z.number().int().nonnegative(),
+					height: z.number().int().nonnegative(),
+				})
+				.optional()
+				.describe(
+					"Optional region to crop from the captured window. Coordinates are relative to the window. Values exceeding window dimensions are clamped.",
+				),
+			format: z
+				.enum(["png", "jpeg"])
+				.optional()
+				.describe("Image format: 'png' (default, lossless) or 'jpeg' (smaller, lossy)"),
+			quality: z
+				.number()
+				.int()
+				.min(1)
+				.max(100)
+				.optional()
+				.describe("JPEG quality 1-100 (default: 85). Ignored for PNG."),
 		},
-		async ({ window_title, output_path, max_width }) => {
+		async ({ window_title, process_name, output_path, max_width, crop, format, quality }) => {
 			const startTime = Date.now();
-			const cfg = await ensureConfig();
 
-			if (!isWindowAllowed(cfg, window_title)) {
-				const message =
-					!cfg.allowlist || cfg.allowlist.length === 0
-						? "No allowlist configured. Use the setup tool to create one, or add an allowlist manually to a-eyes.config.json."
-						: `Window "${window_title}" is not in the allowlist. Allowed windows: ${cfg.allowlist.join(", ")}`;
+			if (!window_title && !process_name) {
+				const message = "At least one of window_title or process_name must be provided.";
 				writeAuditEntry({
 					timestamp: new Date(startTime).toISOString(),
 					tool: "capture",
-					params: { window_title },
+					params: { window_title, process_name },
+					result: "error",
+					duration_ms: Date.now() - startTime,
+					error: message,
+				}).catch((err) => console.error("Audit log error:", err));
+				return {
+					content: [{ type: "text", text: message }],
+					isError: true,
+				};
+			}
+
+			const cfg = await ensureConfig();
+
+			if (!isWindowAllowed(cfg, window_title, process_name)) {
+				const message =
+					!cfg.allowlist || cfg.allowlist.length === 0
+						? "No allowlist configured. Use the setup tool to create one, or add an allowlist manually to a-eyes.config.json."
+						: `Window "${window_title ?? process_name}" is not in the allowlist. Allowed windows: ${cfg.allowlist.join(", ")}`;
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "capture",
+					params: { window_title, process_name },
 					result: "blocked",
 					duration_ms: Date.now() - startTime,
 					error: message,
@@ -96,7 +137,7 @@ export function createServer(): McpServer {
 				writeAuditEntry({
 					timestamp: new Date(startTime).toISOString(),
 					tool: "capture",
-					params: { window_title },
+					params: { window_title, process_name },
 					result: "rate_limited",
 					duration_ms: Date.now() - startTime,
 					error: message,
@@ -109,7 +150,15 @@ export function createServer(): McpServer {
 
 			try {
 				rateLimiter.record();
-				const result = await captureWindow(window_title, undefined, max_width);
+				const result = await captureWindow(
+					window_title,
+					undefined,
+					max_width,
+					crop,
+					process_name,
+					format,
+					quality,
+				);
 
 				// Determine if/where to save
 				let savedPath: string | undefined;
@@ -118,7 +167,7 @@ export function createServer(): McpServer {
 
 				if (saveTo) {
 					try {
-						const resolvedPath = resolveOutputPath(saveTo, result.windowTitle);
+						const resolvedPath = resolveOutputPath(saveTo, result.windowTitle, format);
 						savedPath = await saveScreenshot(result.base64, resolvedPath);
 					} catch (saveErr) {
 						const msg = saveErr instanceof Error ? saveErr.message : String(saveErr);
@@ -137,7 +186,7 @@ export function createServer(): McpServer {
 				writeAuditEntry({
 					timestamp: new Date(startTime).toISOString(),
 					tool: "capture",
-					params: { window_title },
+					params: { window_title, process_name },
 					result: "success",
 					duration_ms: Date.now() - startTime,
 				}).catch((err) => console.error("Audit log error:", err));
@@ -146,7 +195,7 @@ export function createServer(): McpServer {
 						{
 							type: "image",
 							data: result.base64,
-							mimeType: "image/png",
+							mimeType: format === "jpeg" ? "image/jpeg" : "image/png",
 						},
 						{
 							type: "text",
@@ -159,7 +208,7 @@ export function createServer(): McpServer {
 				writeAuditEntry({
 					timestamp: new Date(startTime).toISOString(),
 					tool: "capture",
-					params: { window_title },
+					params: { window_title, process_name },
 					result: "error",
 					duration_ms: Date.now() - startTime,
 					error: message,
@@ -232,7 +281,13 @@ export function createServer(): McpServer {
 		"query",
 		"Capture a screenshot of a window and ask a question about its content",
 		{
-			window_title: z.string().describe("The window title or app name to capture"),
+			window_title: z.string().optional().describe("The window title or app name to capture"),
+			process_name: z
+				.string()
+				.optional()
+				.describe(
+					"The process name to capture (e.g. 'chrome', 'Unity'). More stable than window titles which change dynamically.",
+				),
 			question: z.string().describe("Question to answer about the screenshot content"),
 			max_width: z
 				.number()
@@ -242,20 +297,59 @@ export function createServer(): McpServer {
 				.describe(
 					"Maximum image width in pixels. If set, wider screenshots are proportionally scaled down.",
 				),
+			crop: z
+				.object({
+					x: z.number().int().nonnegative(),
+					y: z.number().int().nonnegative(),
+					width: z.number().int().nonnegative(),
+					height: z.number().int().nonnegative(),
+				})
+				.optional()
+				.describe(
+					"Optional region to crop from the captured window. Coordinates are relative to the window. Values exceeding window dimensions are clamped.",
+				),
+			format: z
+				.enum(["png", "jpeg"])
+				.optional()
+				.describe("Image format: 'png' (default, lossless) or 'jpeg' (smaller, lossy)"),
+			quality: z
+				.number()
+				.int()
+				.min(1)
+				.max(100)
+				.optional()
+				.describe("JPEG quality 1-100 (default: 85). Ignored for PNG."),
 		},
-		async ({ window_title, question, max_width }) => {
+		async ({ window_title, process_name, question, max_width, crop, format, quality }) => {
 			const startTime = Date.now();
-			const cfg = await ensureConfig();
 
-			if (!isWindowAllowed(cfg, window_title)) {
-				const message =
-					!cfg.allowlist || cfg.allowlist.length === 0
-						? "No allowlist configured. Use the setup tool to create one, or add an allowlist manually to a-eyes.config.json."
-						: `Window "${window_title}" is not in the allowlist. Allowed windows: ${cfg.allowlist.join(", ")}`;
+			if (!window_title && !process_name) {
+				const message = "At least one of window_title or process_name must be provided.";
 				writeAuditEntry({
 					timestamp: new Date(startTime).toISOString(),
 					tool: "query",
-					params: { window_title, question },
+					params: { window_title, process_name, question },
+					result: "error",
+					duration_ms: Date.now() - startTime,
+					error: message,
+				}).catch((err) => console.error("Audit log error:", err));
+				return {
+					content: [{ type: "text", text: message }],
+					isError: true,
+				};
+			}
+
+			const cfg = await ensureConfig();
+
+			if (!isWindowAllowed(cfg, window_title, process_name)) {
+				const message =
+					!cfg.allowlist || cfg.allowlist.length === 0
+						? "No allowlist configured. Use the setup tool to create one, or add an allowlist manually to a-eyes.config.json."
+						: `Window "${window_title ?? process_name}" is not in the allowlist. Allowed windows: ${cfg.allowlist.join(", ")}`;
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "query",
+					params: { window_title, process_name, question },
 					result: "blocked",
 					duration_ms: Date.now() - startTime,
 					error: message,
@@ -272,7 +366,7 @@ export function createServer(): McpServer {
 				writeAuditEntry({
 					timestamp: new Date(startTime).toISOString(),
 					tool: "query",
-					params: { window_title, question },
+					params: { window_title, process_name, question },
 					result: "rate_limited",
 					duration_ms: Date.now() - startTime,
 					error: message,
@@ -285,11 +379,19 @@ export function createServer(): McpServer {
 
 			try {
 				rateLimiter.record();
-				const result = await captureWindow(window_title, undefined, max_width);
+				const result = await captureWindow(
+					window_title,
+					undefined,
+					max_width,
+					crop,
+					process_name,
+					format,
+					quality,
+				);
 				writeAuditEntry({
 					timestamp: new Date(startTime).toISOString(),
 					tool: "query",
-					params: { window_title, question },
+					params: { window_title, process_name, question },
 					result: "success",
 					duration_ms: Date.now() - startTime,
 				}).catch((err) => console.error("Audit log error:", err));
@@ -298,7 +400,7 @@ export function createServer(): McpServer {
 						{
 							type: "image",
 							data: result.base64,
-							mimeType: "image/png",
+							mimeType: format === "jpeg" ? "image/jpeg" : "image/png",
 						},
 						{
 							type: "text",
@@ -311,7 +413,7 @@ export function createServer(): McpServer {
 				writeAuditEntry({
 					timestamp: new Date(startTime).toISOString(),
 					tool: "query",
-					params: { window_title, question },
+					params: { window_title, process_name, question },
 					result: "error",
 					duration_ms: Date.now() - startTime,
 					error: message,
@@ -329,6 +431,141 @@ export function createServer(): McpServer {
 		},
 	);
 
+	// --- see tool ---
+	server.tool(
+		"see",
+		"Capture a window and return its UI element tree (buttons, text fields, labels, etc.) plus a screenshot. Use this to understand what is visible in an application without asking a specific question.",
+		{
+			window_title: z.string().optional().describe("The window title or app name to inspect"),
+			process_name: z
+				.string()
+				.optional()
+				.describe(
+					"The process name to inspect (e.g. 'chrome', 'notepad'). More stable than window titles.",
+				),
+		},
+		async ({ window_title, process_name }) => {
+			const startTime = Date.now();
+
+			if (!window_title && !process_name) {
+				const message = "At least one of window_title or process_name must be provided.";
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "see",
+					params: { window_title, process_name },
+					result: "error",
+					duration_ms: Date.now() - startTime,
+					error: message,
+				}).catch((err) => console.error("Audit log error:", err));
+				return {
+					content: [{ type: "text", text: message }],
+					isError: true,
+				};
+			}
+
+			const cfg = await ensureConfig();
+
+			if (!isWindowAllowed(cfg, window_title, process_name)) {
+				const message =
+					!cfg.allowlist || cfg.allowlist.length === 0
+						? "No allowlist configured. Use the setup tool to create one, or add an allowlist manually to a-eyes.config.json."
+						: `Window "${window_title ?? process_name}" is not in the allowlist. Allowed windows: ${cfg.allowlist.join(", ")}`;
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "see",
+					params: { window_title, process_name },
+					result: "blocked",
+					duration_ms: Date.now() - startTime,
+					error: message,
+				}).catch((err) => console.error("Audit log error:", err));
+				return {
+					content: [{ type: "text", text: message }],
+					isError: true,
+				};
+			}
+
+			if (!rateLimiter.isAllowed()) {
+				const retryAfter = rateLimiter.retryAfterSeconds();
+				const message = `Rate limit exceeded: maximum ${cfg.max_captures_per_minute} captures per minute. Try again in ${retryAfter} seconds.`;
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "see",
+					params: { window_title, process_name },
+					result: "rate_limited",
+					duration_ms: Date.now() - startTime,
+					error: message,
+				}).catch((err) => console.error("Audit log error:", err));
+				return {
+					content: [{ type: "text", text: message }],
+					isError: true,
+				};
+			}
+
+			try {
+				rateLimiter.record();
+				const result = await seeWindow(window_title, process_name);
+
+				// Format element list as readable text
+				const elementLines = result.elements.slice(0, 50).map((el) => {
+					const parts = [`[${el.type}]`, `"${el.name}"`];
+					if (el.value) parts.push(`value="${el.value}"`);
+					if (!el.enabled) parts.push("(disabled)");
+					parts.push(`at (${el.bounds.x},${el.bounds.y} ${el.bounds.width}x${el.bounds.height})`);
+					return `  ${el.id}: ${parts.join(" ")}`;
+				});
+
+				const truncated =
+					result.elementCount > 50
+						? `\n  ... and ${result.elementCount - 50} more elements`
+						: "";
+
+				let summaryText =
+					`Window: "${result.windowTitle}" [${result.processName}] — ${result.windowWidth}x${result.windowHeight}\n` +
+					`UI Elements (${result.elementCount} total):\n` +
+					(elementLines.length > 0 ? elementLines.join("\n") + truncated : "  (none found)");
+
+				if (result.text) {
+					summaryText += `\n\nVisible text:\n  ${result.text}`;
+				}
+
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "see",
+					params: { window_title, process_name },
+					result: "success",
+					duration_ms: Date.now() - startTime,
+				}).catch((err) => console.error("Audit log error:", err));
+
+				if (result.image) {
+					return {
+						content: [
+							{ type: "image" as const, data: result.image, mimeType: "image/png" },
+							{ type: "text" as const, text: summaryText },
+						],
+					};
+				}
+
+				return {
+					content: [{ type: "text" as const, text: summaryText }],
+				};
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "see",
+					params: { window_title, process_name },
+					result: "error",
+					duration_ms: Date.now() - startTime,
+					error: message,
+				}).catch((auditErr) => console.error("Audit log error:", auditErr));
+				return {
+					content: [{ type: "text", text: `Failed to inspect window: ${message}` }],
+					isError: true,
+				};
+			}
+		},
+	);
+
 	// --- check_status tool ---
 	server.tool(
 		"check_status",
@@ -336,71 +573,7 @@ export function createServer(): McpServer {
 		{},
 		async () => {
 			const startTime = Date.now();
-			const lines: string[] = ["A-Eyes Status:"];
-
-			// 1. Config check
-			let cfg: AEyesConfig;
-			try {
-				cfg = await ensureConfig();
-				const allowlistCount = cfg.allowlist?.length ?? 0;
-				const allowlistInfo =
-					allowlistCount > 0
-						? `${allowlistCount} window${allowlistCount > 1 ? "s" : ""} in allowlist`
-						: "no allowlist — all captures blocked";
-				lines.push(`  Config:      OK (${allowlistInfo})`);
-			} catch (err) {
-				const msg = err instanceof Error ? err.message : String(err);
-				lines.push(`  Config:      FAIL (${msg})`);
-				cfg = {
-					save_screenshots: false,
-					screenshot_dir: "./screenshots",
-					max_captures_per_minute: 0,
-				};
-			}
-
-			// 2. WSL interop check
-			try {
-				const psVersion = await new Promise<string>((resolvePs, rejectPs) => {
-					execFile(
-						"powershell.exe",
-						["-NoProfile", "-Command", "Write-Output $PSVersionTable.PSVersion.ToString()"],
-						{ timeout: 10_000 },
-						(error, stdout, stderr) => {
-							if (error) {
-								const stderrMsg = stderr.trim();
-								if (stderrMsg.includes("Exec format error")) {
-									rejectPs(new Error('Exec format error — run "wsl --shutdown" and restart'));
-								} else {
-									rejectPs(error);
-								}
-								return;
-							}
-							resolvePs(stdout.trim());
-						},
-					);
-				});
-				lines.push(`  Interop:     OK (PowerShell ${psVersion})`);
-			} catch (err) {
-				const msg = err instanceof Error ? err.message : String(err);
-				lines.push(`  Interop:     FAIL (${msg})`);
-			}
-
-			// 3. Script availability check
-			const scriptsDir = resolve(__dirname, "..", "scripts");
-			const scriptNames = ["screenshot.ps1", "list-windows.ps1"];
-			const missing: string[] = [];
-			for (const name of scriptNames) {
-				try {
-					await access(resolve(scriptsDir, name), constants.R_OK);
-				} catch {
-					missing.push(name);
-				}
-			}
-			if (missing.length === 0) {
-				lines.push(`  Scripts:     OK (${scriptNames.join(", ")})`);
-			} else {
-				lines.push(`  Scripts:     FAIL (missing: ${missing.join(", ")})`);
-			}
+			const { lines } = await runHealthCheck();
 
 			writeAuditEntry({
 				timestamp: new Date(startTime).toISOString(),

@@ -8,8 +8,10 @@ const {
 	isWindowAllowedMock,
 	listWindowsMock,
 	loadConfigMock,
+	loadConfigWithPathMock,
 	resolveOutputPathMock,
 	saveScreenshotMock,
+	seeWindowMock,
 	writeAuditEntryMock,
 	writeConfigMock,
 } = vi.hoisted(() => ({
@@ -18,9 +20,11 @@ const {
 	execFileMock: vi.fn(),
 	listWindowsMock: vi.fn(),
 	loadConfigMock: vi.fn(),
+	loadConfigWithPathMock: vi.fn(),
 	isWindowAllowedMock: vi.fn(),
 	resolveOutputPathMock: vi.fn(),
 	saveScreenshotMock: vi.fn(),
+	seeWindowMock: vi.fn(),
 	writeAuditEntryMock: vi.fn(),
 	writeConfigMock: vi.fn(),
 }));
@@ -35,6 +39,7 @@ vi.mock("../src/list-windows.js", () => ({
 
 vi.mock("../src/config.js", () => ({
 	loadConfig: loadConfigMock,
+	loadConfigWithPath: loadConfigWithPathMock,
 	isWindowAllowed: isWindowAllowedMock,
 }));
 
@@ -54,6 +59,10 @@ vi.mock("../src/setup.js", () => ({
 
 vi.mock("node:child_process", () => ({
 	execFile: execFileMock,
+}));
+
+vi.mock("../src/see.js", () => ({
+	seeWindow: seeWindowMock,
 }));
 
 type ToolHandler = (args: Record<string, unknown>) => Promise<{
@@ -205,7 +214,7 @@ describe("createServer", () => {
 		const capture = getToolHandler(server, "capture");
 		const result = await capture({ window_title: "Chrome" });
 
-		expect(resolveOutputPathMock).toHaveBeenCalledWith("./screenshots", "Chrome");
+		expect(resolveOutputPathMock).toHaveBeenCalledWith("./screenshots", "Chrome", undefined);
 		expect(saveScreenshotMock).toHaveBeenCalled();
 		const text = result.content.find((c) => c.type === "text")?.text ?? "";
 		expect(text).toContain("Saved to:");
@@ -408,7 +417,89 @@ describe("createServer", () => {
 		const capture = getToolHandler(server, "capture");
 		await capture({ window_title: "Chrome", max_width: 800 });
 
-		expect(captureWindowMock).toHaveBeenCalledWith("Chrome", undefined, 800);
+		expect(captureWindowMock).toHaveBeenCalledWith(
+			"Chrome",
+			undefined,
+			800,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+		);
+	});
+
+	it("passes crop to captureWindow in capture tool", async () => {
+		loadConfigMock.mockResolvedValue({});
+		isWindowAllowedMock.mockReturnValue(true);
+		captureWindowMock.mockResolvedValue({ base64: "ZmFrZQ==", windowTitle: "Unity" });
+
+		const server = createServer();
+		const capture = getToolHandler(server, "capture");
+		await capture({ window_title: "Unity", crop: { x: 100, y: 50, width: 400, height: 300 } });
+
+		expect(captureWindowMock).toHaveBeenCalledWith(
+			"Unity",
+			undefined,
+			undefined,
+			{
+				x: 100,
+				y: 50,
+				width: 400,
+				height: 300,
+			},
+			undefined,
+			undefined,
+			undefined,
+		);
+	});
+
+	it("passes crop to captureWindow in query tool", async () => {
+		loadConfigMock.mockResolvedValue({});
+		isWindowAllowedMock.mockReturnValue(true);
+		captureWindowMock.mockResolvedValue({ base64: "ZmFrZQ==", windowTitle: "Unity" });
+
+		const server = createServer();
+		const query = getToolHandler(server, "query");
+		await query({
+			window_title: "Unity",
+			question: "What panel?",
+			crop: { x: 0, y: 0, width: 200, height: 150 },
+		});
+
+		expect(captureWindowMock).toHaveBeenCalledWith(
+			"Unity",
+			undefined,
+			undefined,
+			{
+				x: 0,
+				y: 0,
+				width: 200,
+				height: 150,
+			},
+			undefined,
+			undefined,
+			undefined,
+		);
+	});
+
+	it("does not pass crop when omitted", async () => {
+		loadConfigMock.mockResolvedValue({});
+		isWindowAllowedMock.mockReturnValue(true);
+		captureWindowMock.mockResolvedValue({ base64: "ZmFrZQ==", windowTitle: "Chrome" });
+
+		const server = createServer();
+		const capture = getToolHandler(server, "capture");
+		await capture({ window_title: "Chrome" });
+
+		expect(captureWindowMock).toHaveBeenCalledWith(
+			"Chrome",
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+		);
 	});
 
 	it("passes max_width to captureWindow in query tool", async () => {
@@ -420,11 +511,22 @@ describe("createServer", () => {
 		const query = getToolHandler(server, "query");
 		await query({ window_title: "Chrome", question: "What?", max_width: 600 });
 
-		expect(captureWindowMock).toHaveBeenCalledWith("Chrome", undefined, 600);
+		expect(captureWindowMock).toHaveBeenCalledWith(
+			"Chrome",
+			undefined,
+			600,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+		);
 	});
 
-	it("check_status reports config, interop, and scripts", async () => {
-		loadConfigMock.mockResolvedValue({ allowlist: ["Chrome", "VS Code", "Firefox"] });
+	it("check_status reports version, config with path, interop, and scripts", async () => {
+		loadConfigWithPathMock.mockResolvedValue({
+			config: { allowlist: ["Chrome", "VS Code", "Firefox"] },
+			path: "/home/user/.a-eyes/config.json",
+		});
 		execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
 			callback(null, "5.1.22621.4391", "");
 		});
@@ -434,14 +536,15 @@ describe("createServer", () => {
 		const result = await checkStatus({});
 		const text = result.content[0]?.text ?? "";
 
-		expect(text).toContain("A-Eyes Status:");
+		expect(text).toMatch(/A-Eyes v\d+\.\d+\.\d+ Status:/);
 		expect(text).toContain("Config:      OK (3 windows in allowlist)");
+		expect(text).toContain("[/home/user/.a-eyes/config.json]");
 		expect(text).toContain("Interop:     OK (PowerShell 5.1.22621.4391)");
 		expect(text).toContain("Scripts:     OK");
 	});
 
-	it("check_status shows no-allowlist warning", async () => {
-		loadConfigMock.mockResolvedValue({});
+	it("check_status shows no-allowlist warning with setup hint", async () => {
+		loadConfigWithPathMock.mockResolvedValue({ config: {}, path: null });
 		execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
 			callback(null, "7.4.0", "");
 		});
@@ -452,10 +555,12 @@ describe("createServer", () => {
 		const text = result.content[0]?.text ?? "";
 
 		expect(text).toContain("no allowlist — all captures blocked");
+		expect(text).toContain("[defaults]");
+		expect(text).toContain("Use the setup tool to create an allowlist");
 	});
 
 	it("check_status reports interop failure", async () => {
-		loadConfigMock.mockResolvedValue({});
+		loadConfigWithPathMock.mockResolvedValue({ config: {}, path: null });
 		execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
 			callback(new Error("spawn failed"), "", "Exec format error");
 		});
@@ -470,7 +575,7 @@ describe("createServer", () => {
 	});
 
 	it("check_status logs audit entry", async () => {
-		loadConfigMock.mockResolvedValue({});
+		loadConfigWithPathMock.mockResolvedValue({ config: {}, path: null });
 		execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
 			callback(null, "5.1", "");
 		});
@@ -540,6 +645,10 @@ describe("createServer", () => {
 
 	it("does not rate-limit list_windows or check_status", async () => {
 		loadConfigMock.mockResolvedValue({ max_captures_per_minute: 1 });
+		loadConfigWithPathMock.mockResolvedValue({
+			config: { max_captures_per_minute: 1 },
+			path: null,
+		});
 		isWindowAllowedMock.mockReturnValue(true);
 		captureWindowMock.mockResolvedValue({ base64: "ZmFrZQ==", windowTitle: "Chrome" });
 		listWindowsMock.mockResolvedValue({ windows: [], count: 0 });
@@ -561,6 +670,193 @@ describe("createServer", () => {
 
 		const statusResult = await checkStatus({});
 		expect(statusResult.isError).toBeUndefined();
+	});
+
+	// --- process_name tests ---
+
+	it("captures with process_name only", async () => {
+		loadConfigMock.mockResolvedValue({});
+		isWindowAllowedMock.mockReturnValue(true);
+		captureWindowMock.mockResolvedValue({
+			base64: "ZmFrZQ==",
+			windowTitle: "Google Chrome",
+			processName: "chrome",
+		});
+
+		const server = createServer();
+		const capture = getToolHandler(server, "capture");
+		const result = await capture({ process_name: "chrome" });
+
+		expect(result.isError).toBeUndefined();
+		expect(captureWindowMock).toHaveBeenCalledWith(
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			"chrome",
+			undefined,
+			undefined,
+		);
+		expect(isWindowAllowedMock).toHaveBeenCalledWith(expect.anything(), undefined, "chrome");
+	});
+
+	it("captures with both window_title and process_name", async () => {
+		loadConfigMock.mockResolvedValue({});
+		isWindowAllowedMock.mockReturnValue(true);
+		captureWindowMock.mockResolvedValue({
+			base64: "ZmFrZQ==",
+			windowTitle: "Chrome",
+			processName: "chrome",
+		});
+
+		const server = createServer();
+		const capture = getToolHandler(server, "capture");
+		const result = await capture({ window_title: "Chrome", process_name: "chrome" });
+
+		expect(result.isError).toBeUndefined();
+		expect(captureWindowMock).toHaveBeenCalledWith(
+			"Chrome",
+			undefined,
+			undefined,
+			undefined,
+			"chrome",
+			undefined,
+			undefined,
+		);
+	});
+
+	it("returns error when neither window_title nor process_name provided", async () => {
+		const server = createServer();
+		const capture = getToolHandler(server, "capture");
+		const result = await capture({});
+
+		expect(result.isError).toBe(true);
+		expect(result.content[0]?.text).toContain(
+			"At least one of window_title or process_name must be provided",
+		);
+	});
+
+	it("returns error from query when neither window_title nor process_name provided", async () => {
+		const server = createServer();
+		const query = getToolHandler(server, "query");
+		const result = await query({ question: "What?" });
+
+		expect(result.isError).toBe(true);
+		expect(result.content[0]?.text).toContain(
+			"At least one of window_title or process_name must be provided",
+		);
+	});
+
+	it("passes process_name to isWindowAllowed for allowlist check", async () => {
+		loadConfigMock.mockResolvedValue({ allowlist: ["chrome"] });
+		isWindowAllowedMock.mockReturnValue(false);
+
+		const server = createServer();
+		const capture = getToolHandler(server, "capture");
+		await capture({ process_name: "firefox" });
+
+		expect(isWindowAllowedMock).toHaveBeenCalledWith(expect.anything(), undefined, "firefox");
+	});
+
+	it("passes format and quality to captureWindow in capture tool", async () => {
+		loadConfigMock.mockResolvedValue({});
+		isWindowAllowedMock.mockReturnValue(true);
+		captureWindowMock.mockResolvedValue({ base64: "ZmFrZQ==", windowTitle: "Chrome" });
+
+		const server = createServer();
+		const capture = getToolHandler(server, "capture");
+		const result = await capture({ window_title: "Chrome", format: "jpeg", quality: 75 });
+
+		expect(captureWindowMock).toHaveBeenCalledWith(
+			"Chrome",
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			"jpeg",
+			75,
+		);
+		const imageContent = result.content.find((c) => c.type === "image");
+		expect(imageContent?.mimeType).toBe("image/jpeg");
+	});
+
+	it("returns image/png mimeType when format is not set", async () => {
+		loadConfigMock.mockResolvedValue({});
+		isWindowAllowedMock.mockReturnValue(true);
+		captureWindowMock.mockResolvedValue({ base64: "ZmFrZQ==", windowTitle: "Chrome" });
+
+		const server = createServer();
+		const capture = getToolHandler(server, "capture");
+		const result = await capture({ window_title: "Chrome" });
+
+		const imageContent = result.content.find((c) => c.type === "image");
+		expect(imageContent?.mimeType).toBe("image/png");
+	});
+
+	it("passes format and quality to captureWindow in query tool", async () => {
+		loadConfigMock.mockResolvedValue({});
+		isWindowAllowedMock.mockReturnValue(true);
+		captureWindowMock.mockResolvedValue({ base64: "ZmFrZQ==", windowTitle: "Chrome" });
+
+		const server = createServer();
+		const query = getToolHandler(server, "query");
+		const result = await query({
+			window_title: "Chrome",
+			question: "What?",
+			format: "jpeg",
+			quality: 60,
+		});
+
+		expect(captureWindowMock).toHaveBeenCalledWith(
+			"Chrome",
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			"jpeg",
+			60,
+		);
+		const imageContent = result.content.find((c) => c.type === "image");
+		expect(imageContent?.mimeType).toBe("image/jpeg");
+	});
+
+	it("passes format to resolveOutputPath for save", async () => {
+		loadConfigMock.mockResolvedValue({ save_screenshots: false });
+		isWindowAllowedMock.mockReturnValue(true);
+		captureWindowMock.mockResolvedValue({ base64: "ZmFrZQ==", windowTitle: "Chrome" });
+		resolveOutputPathMock.mockReturnValue("/tmp/chrome.jpg");
+		saveScreenshotMock.mockResolvedValue("/tmp/chrome.jpg");
+
+		const server = createServer();
+		const capture = getToolHandler(server, "capture");
+		await capture({ window_title: "Chrome", output_path: "/tmp", format: "jpeg" });
+
+		expect(resolveOutputPathMock).toHaveBeenCalledWith("/tmp", "Chrome", "jpeg");
+	});
+
+	it("query with process_name only calls captureWindow correctly", async () => {
+		loadConfigMock.mockResolvedValue({});
+		isWindowAllowedMock.mockReturnValue(true);
+		captureWindowMock.mockResolvedValue({
+			base64: "ZmFrZQ==",
+			windowTitle: "Unity Editor",
+			processName: "Unity",
+		});
+
+		const server = createServer();
+		const query = getToolHandler(server, "query");
+		const result = await query({ process_name: "Unity", question: "What scene?" });
+
+		expect(result.isError).toBeUndefined();
+		expect(captureWindowMock).toHaveBeenCalledWith(
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			"Unity",
+			undefined,
+			undefined,
+		);
 	});
 
 	// --- setup tool tests ---
@@ -693,5 +989,226 @@ describe("createServer", () => {
 		const setupEntry = writeAuditEntryMock.mock.calls.find((call) => call[0].tool === "setup");
 		expect(setupEntry).toBeDefined();
 		expect(setupEntry[0].result).toBe("success");
+	});
+
+	// --- see tool tests ---
+
+	describe("see tool", () => {
+		it("returns error when neither window_title nor process_name provided", async () => {
+			const server = createServer();
+			const see = getToolHandler(server, "see");
+			const result = await see({});
+
+			expect(result.isError).toBe(true);
+			expect(result.content[0]?.text).toContain(
+				"At least one of window_title or process_name must be provided",
+			);
+			expect(seeWindowMock).not.toHaveBeenCalled();
+		});
+
+		it("returns blocked when window is not in allowlist", async () => {
+			loadConfigMock.mockResolvedValue({ allowlist: ["VS Code"] });
+			isWindowAllowedMock.mockReturnValue(false);
+
+			const server = createServer();
+			const see = getToolHandler(server, "see");
+			const result = await see({ window_title: "Chrome" });
+
+			expect(result.isError).toBe(true);
+			expect(result.content[0]?.text).toContain("not in the allowlist");
+			expect(result.content[0]?.text).toContain("VS Code");
+			expect(seeWindowMock).not.toHaveBeenCalled();
+		});
+
+		it("returns blocked with setup hint when no allowlist configured", async () => {
+			loadConfigMock.mockResolvedValue({});
+			isWindowAllowedMock.mockReturnValue(false);
+
+			const server = createServer();
+			const see = getToolHandler(server, "see");
+			const result = await see({ window_title: "Chrome" });
+
+			expect(result.isError).toBe(true);
+			expect(result.content[0]?.text).toContain("No allowlist configured");
+			expect(result.content[0]?.text).toContain("setup tool");
+			expect(seeWindowMock).not.toHaveBeenCalled();
+		});
+
+		it("returns image and element summary on successful call", async () => {
+			loadConfigMock.mockResolvedValue({});
+			isWindowAllowedMock.mockReturnValue(true);
+			seeWindowMock.mockResolvedValue({
+				windowTitle: "Notepad",
+				processName: "notepad",
+				windowWidth: 800,
+				windowHeight: 600,
+				elementCount: 3,
+				elements: [
+					{
+						id: "elem_0",
+						type: "Button",
+						name: "OK",
+						value: "",
+						enabled: true,
+						bounds: { x: 100, y: 200, width: 80, height: 30 },
+					},
+					{
+						id: "elem_1",
+						type: "Edit",
+						name: "Text area",
+						value: "Hello",
+						enabled: true,
+						bounds: { x: 0, y: 0, width: 800, height: 500 },
+					},
+					{
+						id: "elem_2",
+						type: "MenuItem",
+						name: "File",
+						value: "",
+						enabled: false,
+						bounds: { x: 0, y: 0, width: 40, height: 20 },
+					},
+				],
+				text: "OK Text area Hello File",
+				image: "ZmFrZWltYWdl",
+			});
+
+			const server = createServer();
+			const see = getToolHandler(server, "see");
+			const result = await see({ window_title: "Notepad" });
+
+			expect(result.isError).toBeUndefined();
+
+			const imageContent = result.content.find((c) => c.type === "image");
+			expect(imageContent?.data).toBe("ZmFrZWltYWdl");
+			expect(imageContent?.mimeType).toBe("image/png");
+
+			const textContent = result.content.find((c) => c.type === "text");
+			const text = textContent?.text ?? "";
+			expect(text).toContain('"Notepad"');
+			expect(text).toContain("notepad");
+			expect(text).toContain("800x600");
+			expect(text).toContain("UI Elements (3 total)");
+			expect(text).toContain("elem_0");
+			expect(text).toContain("[Button]");
+			expect(text).toContain('"OK"');
+			expect(text).toContain("elem_1");
+			expect(text).toContain('value="Hello"');
+			expect(text).toContain("(disabled)");
+			expect(text).toContain("Visible text:");
+		});
+
+		it("returns summary without image when no image returned", async () => {
+			loadConfigMock.mockResolvedValue({});
+			isWindowAllowedMock.mockReturnValue(true);
+			seeWindowMock.mockResolvedValue({
+				windowTitle: "Notepad",
+				processName: "notepad",
+				windowWidth: 800,
+				windowHeight: 600,
+				elementCount: 0,
+				elements: [],
+				text: "",
+				image: undefined,
+			});
+
+			const server = createServer();
+			const see = getToolHandler(server, "see");
+			const result = await see({ window_title: "Notepad" });
+
+			expect(result.isError).toBeUndefined();
+			expect(result.content.find((c) => c.type === "image")).toBeUndefined();
+			const text = result.content.find((c) => c.type === "text")?.text ?? "";
+			expect(text).toContain("(none found)");
+		});
+
+		it("returns error when seeWindow rejects", async () => {
+			loadConfigMock.mockResolvedValue({});
+			isWindowAllowedMock.mockReturnValue(true);
+			seeWindowMock.mockRejectedValue(new Error("Window not found: 'Notepad'"));
+
+			const server = createServer();
+			const see = getToolHandler(server, "see");
+			const result = await see({ window_title: "Notepad" });
+
+			expect(result.isError).toBe(true);
+			expect(result.content[0]?.text).toContain("Failed to inspect window");
+			expect(result.content[0]?.text).toContain("Window not found: 'Notepad'");
+		});
+
+		it("calls seeWindow with process_name only", async () => {
+			loadConfigMock.mockResolvedValue({});
+			isWindowAllowedMock.mockReturnValue(true);
+			seeWindowMock.mockResolvedValue({
+				windowTitle: "Chrome",
+				processName: "chrome",
+				windowWidth: 1200,
+				windowHeight: 800,
+				elementCount: 0,
+				elements: [],
+				text: "",
+				image: undefined,
+			});
+
+			const server = createServer();
+			const see = getToolHandler(server, "see");
+			await see({ process_name: "chrome" });
+
+			expect(seeWindowMock).toHaveBeenCalledWith(undefined, "chrome");
+		});
+
+		it("logs audit entry on success", async () => {
+			loadConfigMock.mockResolvedValue({});
+			isWindowAllowedMock.mockReturnValue(true);
+			seeWindowMock.mockResolvedValue({
+				windowTitle: "Notepad",
+				processName: "notepad",
+				windowWidth: 800,
+				windowHeight: 600,
+				elementCount: 0,
+				elements: [],
+				text: "",
+				image: undefined,
+			});
+
+			const server = createServer();
+			const see = getToolHandler(server, "see");
+			await see({ window_title: "Notepad" });
+
+			expect(writeAuditEntryMock).toHaveBeenCalledTimes(1);
+			const entry = writeAuditEntryMock.mock.calls[0][0];
+			expect(entry.tool).toBe("see");
+			expect(entry.result).toBe("success");
+		});
+
+		it("logs audit entry on blocked call", async () => {
+			loadConfigMock.mockResolvedValue({ allowlist: ["VS Code"] });
+			isWindowAllowedMock.mockReturnValue(false);
+
+			const server = createServer();
+			const see = getToolHandler(server, "see");
+			await see({ window_title: "Chrome" });
+
+			expect(writeAuditEntryMock).toHaveBeenCalledTimes(1);
+			const entry = writeAuditEntryMock.mock.calls[0][0];
+			expect(entry.tool).toBe("see");
+			expect(entry.result).toBe("blocked");
+		});
+
+		it("logs audit entry on error", async () => {
+			loadConfigMock.mockResolvedValue({});
+			isWindowAllowedMock.mockReturnValue(true);
+			seeWindowMock.mockRejectedValue(new Error("See failed"));
+
+			const server = createServer();
+			const see = getToolHandler(server, "see");
+			await see({ window_title: "Notepad" });
+
+			expect(writeAuditEntryMock).toHaveBeenCalledTimes(1);
+			const entry = writeAuditEntryMock.mock.calls[0][0];
+			expect(entry.tool).toBe("see");
+			expect(entry.result).toBe("error");
+			expect(entry.error).toBe("See failed");
+		});
 	});
 });

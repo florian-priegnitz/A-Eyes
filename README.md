@@ -38,37 +38,55 @@ The server runs inside WSL2 and calls Windows PowerShell scripts through WSL int
 
 | Tool | Description |
 |------|-------------|
-| `capture` | Screenshot a window by title. Optionally save to disk via `output_path`. Supports `max_width` for resize. |
+| `capture` | Screenshot a window by title or process name. Optionally save to disk via `output_path`. Supports `max_width` for resize, `crop` for regions, and `format`/`quality` for JPEG output. |
+| `see` | Capture a window and return its full UI element tree (buttons, fields, labels, menus) via Windows UI Automation, plus all visible text. Use this to understand application state without asking a specific question. |
 | `list_windows` | List all visible windows. Shows `+`/`-` markers for capturable vs. blocked. |
-| `query` | Capture a screenshot and forward a question about its content to Claude. Supports `max_width`. |
+| `query` | Capture a screenshot and forward a question about its content to Claude. Same parameters as `capture`. |
 | `check_status` | Health check: verifies config, WSL interop, and script availability. |
+| `setup` | Interactive first-run setup: preview open windows and create an allowlist config. |
 
-## Installation & Quickstart
+## Quick Start
 
-**Requirements:** WSL2 on Windows 10/11, Node.js 18+, pnpm
+**Requirements:** WSL2 on Windows 10/11, Node.js 18+
 
-### 1. Clone and build
+### 1. Clone and install
 
 ```bash
 git clone https://github.com/florian-priegnitz/a-eyes.git
 cd a-eyes
-pnpm install && pnpm build
+./install.sh
 ```
 
-### 2. Register as MCP server
+The install script installs dependencies, builds the project, registers A-Eyes as a global MCP server (`claude mcp add -s user`), and runs a health check.
 
-Add a `.mcp.json` file to the **root of the project where you want to use A-Eyes** (not in the a-eyes directory itself):
+### 2. Configure allowlist
 
-**Option A — CLI (recommended):**
+Restart Claude Code, then ask:
+
+> "Run the a-eyes setup tool"
+
+This shows your open windows and lets you create an allowlist. Without an allowlist, all captures are blocked.
+
+Then try: *"Take a screenshot of Chrome"* or *"What windows are open?"*
+
+### Verify
 
 ```bash
-cd /path/to/your-project
-claude mcp add a-eyes -s project -- node /path/to/a-eyes/dist/index.js
+node dist/index.js --check
 ```
 
-**Option B — Manual `.mcp.json`:**
+Or inside Claude Code: use the `check_status` tool, or check `/mcp` → "Manage MCP servers" — A-Eyes should show `connected` with 6 tools.
 
-Create `.mcp.json` in your project root:
+### Manual installation
+
+If you prefer not to use the install script:
+
+```bash
+pnpm install && pnpm build
+claude mcp add a-eyes -s user -- node $(pwd)/dist/index.js
+```
+
+Or create `.mcp.json` in a project root for per-project registration:
 
 ```json
 {
@@ -83,27 +101,11 @@ Create `.mcp.json` in your project root:
 }
 ```
 
-> **Important:** Use WSL paths (`/mnt/c/...`), not Windows paths (`C:\...`). The `cwd` field ensures the server finds its PowerShell scripts.
-
-### 3. Configure allowlist
-
-Without this, all captures are blocked:
-
-```bash
-cd /path/to/a-eyes
-cp a-eyes.config.example.json a-eyes.config.json
-# Edit the allowlist to match your environment
-```
-
-### 4. Restart and verify
-
-Restart Claude Code, then check `/mcp` → "Manage MCP servers" — A-Eyes should show `connected` with 4 tools.
-
-Then try: *"Take a screenshot of Chrome"* or *"What windows are open?"*
+> **Note:** Use WSL paths (`/mnt/c/...`), not Windows paths (`C:\...`). The `cwd` field ensures the server finds its PowerShell scripts.
 
 ## Configuration
 
-A-Eyes searches for config in order: `./a-eyes.config.json` (project) → `~/.a-eyes/config.json` (user home) → deny-all defaults.
+A-Eyes searches for config in order: `./a-eyes.config.json` (cwd) → `<package-root>/a-eyes.config.json` → `~/.a-eyes/config.json` (user home) → deny-all defaults.
 
 ```json
 {
@@ -115,7 +117,7 @@ A-Eyes searches for config in order: `./a-eyes.config.json` (project) → `~/.a-
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `allowlist` | `[]` | Window title substrings that are allowed for capture. Empty = all blocked. |
+| `allowlist` | `[]` | Window title or process name substrings that are allowed for capture. Empty = all blocked. |
 | `save_screenshots` | `false` | Auto-save every capture to `screenshot_dir`. |
 | `screenshot_dir` | `"./screenshots"` | Target directory for auto-saved PNGs. |
 | `max_captures_per_minute` | `0` | Rate limit for `capture`/`query` calls. 0 = unlimited. |
@@ -123,17 +125,21 @@ A-Eyes searches for config in order: `./a-eyes.config.json` (project) → `~/.a-
 ## Testing
 
 ```bash
-pnpm test           # 72 tests across 8 files
+pnpm test           # 146 tests across 10 files
 pnpm lint           # Biome linter + formatter
 ```
 
-Test coverage includes: config loading and search chain, capture/list-windows PowerShell integration, audit log file rotation and append behavior, server-level tool handler responses for success, blocked, and error paths, WSL path conversion edge cases.
+Test coverage includes: config loading and search chain, capture/list-windows PowerShell integration, process name matching, audit log file rotation and append behavior, server-level tool handler responses for success, blocked, and error paths, rate limiting, WSL path conversion edge cases.
 
 ## Troubleshooting
 
+**How do I know it's working?** Run `node dist/index.js --check` for a full health check (config, WSL interop, scripts). Inside Claude Code, use the `check_status` tool or check `/mcp` → "Manage MCP servers".
+
 **`Exec format error` when calling PowerShell:** WSL interop is disabled. Run `wsl --shutdown` from Windows CMD/PowerShell, then restart your distro.
 
-**Quick health check** (run inside WSL):
+**"No allowlist configured":** Use the `setup` tool in Claude Code, or create `a-eyes.config.json` manually with an `allowlist` array.
+
+**Quick WSL interop check** (run inside WSL):
 
 ```bash
 test -e /proc/sys/fs/binfmt_misc/WSLInterop && echo OK || echo MISSING

@@ -1,13 +1,40 @@
 param(
-    [Parameter(Mandatory=$true)]
-    [string]$WindowTitle,
+    [Parameter(Mandatory=$false)]
+    [string]$WindowTitle = "",
 
     [Parameter(Mandatory=$false)]
-    [int]$MaxWidth = 0
+    [string]$ProcessName = "",
+
+    [Parameter(Mandatory=$false)]
+    [int]$MaxWidth = 0,
+
+    [Parameter(Mandatory=$false)]
+    [int]$CropX = 0,
+
+    [Parameter(Mandatory=$false)]
+    [int]$CropY = 0,
+
+    [Parameter(Mandatory=$false)]
+    [int]$CropWidth = 0,
+
+    [Parameter(Mandatory=$false)]
+    [int]$CropHeight = 0,
+
+    [Parameter(Mandatory=$false)]
+    [string]$Format = "PNG",
+
+    [Parameter(Mandatory=$false)]
+    [int]$Quality = 85
 )
 
 # Ensure errors produce clean JSON output
 $ErrorActionPreference = "Stop"
+
+if ([string]::IsNullOrEmpty($WindowTitle) -and [string]::IsNullOrEmpty($ProcessName)) {
+    $result = @{ error = "At least one of -WindowTitle or -ProcessName must be provided" } | ConvertTo-Json -Compress
+    Write-Output $result
+    exit 1
+}
 
 function Write-JsonError {
     param([string]$Message)
@@ -51,6 +78,9 @@ public class Win32 {
     public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
 
     [DllImport("user32.dll")]
+    public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+    [DllImport("user32.dll")]
     public static extern bool PrintWindow(IntPtr hWnd, IntPtr hdcBlt, uint nFlags);
 
     public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
@@ -68,10 +98,17 @@ public class Win32 {
 # Enable DPI awareness for accurate window dimensions
 [Win32]::SetProcessDPIAware() | Out-Null
 
-# Find window by title (partial match)
+# Find window by title and/or process name
 $foundHandle = [IntPtr]::Zero
 $foundTitle = ""
-$windowTitlePattern = "*$([System.Management.Automation.WildcardPattern]::Escape($WindowTitle))*"
+$foundProcessName = ""
+$foundProcessId = 0
+$hasTitle = -not [string]::IsNullOrEmpty($WindowTitle)
+$hasProcess = -not [string]::IsNullOrEmpty($ProcessName)
+
+if ($hasTitle) {
+    $windowTitlePattern = "*$([System.Management.Automation.WildcardPattern]::Escape($WindowTitle))*"
+}
 
 $callback = [Win32+EnumWindowsProc]{
     param($hWnd, $lParam)
@@ -85,9 +122,37 @@ $callback = [Win32+EnumWindowsProc]{
     [Win32]::GetWindowText($hWnd, $sb, $sb.Capacity) | Out-Null
     $title = $sb.ToString()
 
-    if ($title -like $script:windowTitlePattern) {
+    # Check title match (if required)
+    $titleMatch = $true
+    if ($script:hasTitle) {
+        $titleMatch = $title -like $script:windowTitlePattern
+    }
+
+    # Check process name match (if required)
+    $processMatch = $true
+    $procName = ""
+    $procId = 0
+    if ($script:hasProcess) {
+        $wpid = [uint32]0
+        [Win32]::GetWindowThreadProcessId($hWnd, [ref]$wpid) | Out-Null
+        $procId = [int]$wpid
+        try {
+            $proc = [System.Diagnostics.Process]::GetProcessById($wpid)
+            $procName = $proc.ProcessName
+        } catch {
+            $procName = ""
+        }
+        $processMatch = $procName -eq $script:ProcessName
+    }
+
+    # Both must match (AND logic)
+    if ($titleMatch -and $processMatch) {
         $script:foundHandle = $hWnd
         $script:foundTitle = $title
+        if ($procName -ne "") {
+            $script:foundProcessName = $procName
+            $script:foundProcessId = $procId
+        }
         return $false  # Stop enumerating
     }
     return $true
@@ -96,7 +161,26 @@ $callback = [Win32+EnumWindowsProc]{
 [Win32]::EnumWindows($callback, [IntPtr]::Zero) | Out-Null
 
 if ($foundHandle -eq [IntPtr]::Zero) {
-    Write-JsonError "Window not found: '$WindowTitle'"
+    if ($hasTitle -and $hasProcess) {
+        Write-JsonError "Window not found matching title '$WindowTitle' and process '$ProcessName'"
+    } elseif ($hasTitle) {
+        Write-JsonError "Window not found: '$WindowTitle'"
+    } else {
+        Write-JsonError "No window found for process: '$ProcessName'"
+    }
+}
+
+# Get process info if not already resolved (title-only match)
+if ([string]::IsNullOrEmpty($foundProcessName)) {
+    $wpid = [uint32]0
+    [Win32]::GetWindowThreadProcessId($foundHandle, [ref]$wpid) | Out-Null
+    $foundProcessId = [int]$wpid
+    try {
+        $proc = [System.Diagnostics.Process]::GetProcessById($wpid)
+        $foundProcessName = $proc.ProcessName
+    } catch {
+        $foundProcessName = "unknown"
+    }
 }
 
 # Get window dimensions
@@ -130,6 +214,24 @@ try {
         $graphics.CopyFromScreen($rect.Left, $rect.Top, 0, 0, [System.Drawing.Size]::new($width, $height))
     }
 
+    # Crop if crop parameters are set
+    if ($CropWidth -gt 0 -and $CropHeight -gt 0) {
+        # Clamp crop region to actual image dimensions
+        $CropX = [Math]::Max(0, [Math]::Min($CropX, $width - 1))
+        $CropY = [Math]::Max(0, [Math]::Min($CropY, $height - 1))
+        $CropWidth = [Math]::Min($CropWidth, $width - $CropX)
+        $CropHeight = [Math]::Min($CropHeight, $height - $CropY)
+
+        if ($CropWidth -gt 0 -and $CropHeight -gt 0) {
+            $cropRect = New-Object System.Drawing.Rectangle($CropX, $CropY, $CropWidth, $CropHeight)
+            $cropped = $bitmap.Clone($cropRect, $bitmap.PixelFormat)
+            $bitmap.Dispose()
+            $bitmap = $cropped
+            $width = $CropWidth
+            $height = $CropHeight
+        }
+    }
+
     # Resize if MaxWidth is set and image is wider
     if ($MaxWidth -gt 0 -and $width -gt $MaxWidth) {
         $ratio = $MaxWidth / $width
@@ -145,15 +247,26 @@ try {
         $height = $newHeight
     }
 
-    # Convert to PNG and base64
+    # Convert to image format and base64
     $stream = New-Object System.IO.MemoryStream
-    $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
+    if ($Format.ToUpper() -eq "JPEG") {
+        $encoder = [System.Drawing.Imaging.Encoder]::Quality
+        $encoderParams = New-Object System.Drawing.Imaging.EncoderParameters(1)
+        $encoderParams.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter($encoder, [long]$Quality)
+        $jpegCodec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() |
+            Where-Object { $_.MimeType -eq "image/jpeg" }
+        $bitmap.Save($stream, $jpegCodec, $encoderParams)
+    } else {
+        $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
+    }
     $base64 = [Convert]::ToBase64String($stream.ToArray())
 
     # Output JSON result
     $result = @{
         image = $base64
         title = $foundTitle
+        processName = $foundProcessName
+        processId = $foundProcessId
         width = $width
         height = $height
     } | ConvertTo-Json -Compress

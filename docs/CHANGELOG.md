@@ -8,6 +8,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `see` MCP tool — captures a window screenshot and returns its full UI element tree (buttons, text fields, labels, menus, etc.) via Windows UI Automation, plus all visible text. Enables agents to understand application state structurally without asking a specific question.
+- New `src/see.ts` module and `scripts/see.ps1` — PowerShell-based UI Automation enumeration using `System.Windows.Automation`, returns elements with id, type, name, value, enabled state, and bounding rectangle.
+
+### Fixed
+- `$pid` variable collision in `scripts/screenshot.ps1` and `scripts/see.ps1` — `$PID` is a PowerShell built-in read-only variable; renamed to `$wpid` to avoid `SessionStateUnauthorizedAccessException` on some systems.
+
+### Added
+- `format` parameter for `capture` and `query` tools — choose between `png` (default, lossless) and `jpeg` (smaller, lossy) output format
+- `quality` parameter for `capture` and `query` tools — JPEG quality 1-100 (default: 85), ignored for PNG
+- JPEG encoding in `scripts/screenshot.ps1` via GDI+ ImageCodecInfo with configurable quality
+- `generateFilename()` and `resolveOutputPath()` now support JPEG format (`.jpg` extension)
+
+### Changed
+- `captureWindow()` accepts optional `format` and `quality` parameters, forwarded as PowerShell `-Format` and `-Quality` args
+- `resolveOutputPath()` now recognizes `.jpg` and `.jpeg` extensions as image filenames
+
+### Added
+- `install.sh` — one-command installer: checks prerequisites, builds, registers MCP server via `claude mcp add -s user`, runs health check
+- `--check` CLI flag on `node dist/index.js` — standalone health check without starting the MCP server (exit code 0/1)
+- `check_status` tool now shows A-Eyes version (from package.json), config file path, and setup hint when no allowlist is configured
+- Shared `src/health-check.ts` module — reusable health check logic used by both `check_status` tool and `--check` CLI
+- `loadConfigWithPath()` export in `src/config.ts` — returns config alongside the resolved file path
+
+### Changed
+- README installation simplified: clone → `./install.sh` → configure allowlist (was 4 manual steps)
+- `check_status` tool delegates to shared `runHealthCheck()` instead of inline logic
+
+### Added
+- `process_name` parameter for `capture` and `query` tools — allows targeting windows by stable process name (e.g. `chrome`, `Unity`) instead of dynamic window titles. Both parameters are optional but at least one must be provided. When both are given, both must match (AND logic in PowerShell).
+- Allowlist now matches against both window title and process name (OR logic) — a window is allowed if either its title or process name matches an allowlist pattern
 - `setup` MCP tool — interactive first-run setup with preview/write modes: shows open windows and config status (preview), or writes `~/.a-eyes/config.json` with a given allowlist (write)
 - New `src/setup.ts` module with `detectExistingConfig()` and `writeConfig()` functions
 - Unit tests for setup module and setup tool integration in server tests

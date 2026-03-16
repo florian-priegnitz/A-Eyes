@@ -197,4 +197,29 @@ describe("isWindowAllowed", () => {
 		const config = { allowlist: ["chrome"] };
 		expect(isWindowAllowed(config, "Google CHROME")).toBe(true);
 	});
+
+	it("allows when process name matches allowlist", () => {
+		const config = { allowlist: ["chrome"] };
+		expect(isWindowAllowed(config, undefined, "chrome")).toBe(true);
+	});
+
+	it("allows when process name matches but title does not", () => {
+		const config = { allowlist: ["chrome"] };
+		expect(isWindowAllowed(config, "Some Random Title", "chrome")).toBe(true);
+	});
+
+	it("allows when title matches but process does not", () => {
+		const config = { allowlist: ["Chrome"] };
+		expect(isWindowAllowed(config, "Google Chrome - New Tab", "unknown")).toBe(true);
+	});
+
+	it("blocks when neither title nor process matches", () => {
+		const config = { allowlist: ["Chrome"] };
+		expect(isWindowAllowed(config, "Firefox", "firefox")).toBe(false);
+	});
+
+	it("blocks when no title or process provided", () => {
+		const config = { allowlist: ["Chrome"] };
+		expect(isWindowAllowed(config)).toBe(false);
+	});
 });

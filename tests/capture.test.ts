@@ -109,6 +109,49 @@ describe("capture module", () => {
 		expect(args).not.toContain("-MaxWidth");
 	});
 
+	it("passes crop parameters as PowerShell arguments", async () => {
+		execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+			callback(null, '{"image":"ZmFrZQ==","title":"Unity"}', "");
+			return { stdin: { end: vi.fn() } };
+		});
+
+		const { captureWindow } = await import("../src/capture.js");
+		await captureWindow("Unity", undefined, undefined, { x: 100, y: 50, width: 400, height: 300 });
+
+		const args = execFileMock.mock.calls[0][1] as string[];
+		const cropXIndex = args.indexOf("-CropX");
+		expect(cropXIndex).toBeGreaterThan(-1);
+		expect(args[cropXIndex + 1]).toBe("100");
+
+		const cropYIndex = args.indexOf("-CropY");
+		expect(cropYIndex).toBeGreaterThan(-1);
+		expect(args[cropYIndex + 1]).toBe("50");
+
+		const cropWidthIndex = args.indexOf("-CropWidth");
+		expect(cropWidthIndex).toBeGreaterThan(-1);
+		expect(args[cropWidthIndex + 1]).toBe("400");
+
+		const cropHeightIndex = args.indexOf("-CropHeight");
+		expect(cropHeightIndex).toBeGreaterThan(-1);
+		expect(args[cropHeightIndex + 1]).toBe("300");
+	});
+
+	it("does not pass crop flags when crop is not set", async () => {
+		execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+			callback(null, '{"image":"ZmFrZQ==","title":"Chrome"}', "");
+			return { stdin: { end: vi.fn() } };
+		});
+
+		const { captureWindow } = await import("../src/capture.js");
+		await captureWindow("Chrome");
+
+		const args = execFileMock.mock.calls[0][1] as string[];
+		expect(args).not.toContain("-CropX");
+		expect(args).not.toContain("-CropY");
+		expect(args).not.toContain("-CropWidth");
+		expect(args).not.toContain("-CropHeight");
+	});
+
 	it("rejects when output is neither JSON nor base64", async () => {
 		execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
 			callback(null, "unexpected-output", "");
@@ -117,5 +160,95 @@ describe("capture module", () => {
 
 		const { captureWindow } = await import("../src/capture.js");
 		await expect(captureWindow("Chrome")).rejects.toThrow("Failed to parse screenshot output");
+	});
+
+	it("passes process name as -ProcessName PowerShell argument", async () => {
+		execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+			callback(null, '{"image":"ZmFrZQ==","title":"Chrome","processName":"chrome"}', "");
+			return { stdin: { end: vi.fn() } };
+		});
+
+		const { captureWindow } = await import("../src/capture.js");
+		const result = await captureWindow("Chrome", undefined, undefined, undefined, "chrome");
+
+		const args = execFileMock.mock.calls[0][1] as string[];
+		const processIndex = args.indexOf("-ProcessName");
+		expect(processIndex).toBeGreaterThan(-1);
+		expect(args[processIndex + 1]).toBe("chrome");
+		expect(result.processName).toBe("chrome");
+	});
+
+	it("does not pass -ProcessName when processName is not set", async () => {
+		execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+			callback(null, '{"image":"ZmFrZQ==","title":"Chrome"}', "");
+			return { stdin: { end: vi.fn() } };
+		});
+
+		const { captureWindow } = await import("../src/capture.js");
+		await captureWindow("Chrome");
+
+		const args = execFileMock.mock.calls[0][1] as string[];
+		expect(args).not.toContain("-ProcessName");
+	});
+
+	it("passes format as -Format PowerShell argument", async () => {
+		execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+			callback(null, '{"image":"ZmFrZQ==","title":"Chrome"}', "");
+			return { stdin: { end: vi.fn() } };
+		});
+
+		const { captureWindow } = await import("../src/capture.js");
+		await captureWindow("Chrome", undefined, undefined, undefined, undefined, "jpeg");
+
+		const args = execFileMock.mock.calls[0][1] as string[];
+		const formatIndex = args.indexOf("-Format");
+		expect(formatIndex).toBeGreaterThan(-1);
+		expect(args[formatIndex + 1]).toBe("JPEG");
+	});
+
+	it("passes quality as -Quality PowerShell argument", async () => {
+		execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+			callback(null, '{"image":"ZmFrZQ==","title":"Chrome"}', "");
+			return { stdin: { end: vi.fn() } };
+		});
+
+		const { captureWindow } = await import("../src/capture.js");
+		await captureWindow("Chrome", undefined, undefined, undefined, undefined, "jpeg", 75);
+
+		const args = execFileMock.mock.calls[0][1] as string[];
+		const qualityIndex = args.indexOf("-Quality");
+		expect(qualityIndex).toBeGreaterThan(-1);
+		expect(args[qualityIndex + 1]).toBe("75");
+	});
+
+	it("does not pass -Format or -Quality when not set", async () => {
+		execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+			callback(null, '{"image":"ZmFrZQ==","title":"Chrome"}', "");
+			return { stdin: { end: vi.fn() } };
+		});
+
+		const { captureWindow } = await import("../src/capture.js");
+		await captureWindow("Chrome");
+
+		const args = execFileMock.mock.calls[0][1] as string[];
+		expect(args).not.toContain("-Format");
+		expect(args).not.toContain("-Quality");
+	});
+
+	it("passes only -ProcessName without -WindowTitle when title is undefined", async () => {
+		execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+			callback(null, '{"image":"ZmFrZQ==","title":"Google Chrome","processName":"chrome"}', "");
+			return { stdin: { end: vi.fn() } };
+		});
+
+		const { captureWindow } = await import("../src/capture.js");
+		const result = await captureWindow(undefined, undefined, undefined, undefined, "chrome");
+
+		const args = execFileMock.mock.calls[0][1] as string[];
+		expect(args).not.toContain("-WindowTitle");
+		const processIndex = args.indexOf("-ProcessName");
+		expect(processIndex).toBeGreaterThan(-1);
+		expect(args[processIndex + 1]).toBe("chrome");
+		expect(result.windowTitle).toBe("Google Chrome");
 	});
 });

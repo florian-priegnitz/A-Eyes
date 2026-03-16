@@ -10,12 +10,17 @@ const __dirname = fileURLToPath(new URL(".", import.meta.url));
 export interface CaptureResult {
 	base64: string;
 	windowTitle: string;
+	processName?: string;
 }
 
 export function captureWindow(
-	windowTitle: string,
+	windowTitle: string | undefined,
 	timeoutMs = 30000,
 	maxWidth?: number,
+	crop?: { x: number; y: number; width: number; height: number },
+	processName?: string,
+	format?: "png" | "jpeg",
+	quality?: number,
 ): Promise<CaptureResult> {
 	return new Promise((resolve_, reject) => {
 		const scriptPath = resolve(__dirname, "..", "scripts", "screenshot.ps1");
@@ -28,13 +33,34 @@ export function captureWindow(
 			"Bypass",
 			"-File",
 			winScriptPath,
-			"-WindowTitle",
-			// execFile passes argv directly; no shell-style quoting required.
-			windowTitle,
 		];
+
+		if (windowTitle !== undefined) {
+			// execFile passes argv directly; no shell-style quoting required.
+			args.push("-WindowTitle", windowTitle);
+		}
+
+		if (processName !== undefined) {
+			args.push("-ProcessName", processName);
+		}
 
 		if (maxWidth !== undefined) {
 			args.push("-MaxWidth", String(maxWidth));
+		}
+
+		if (crop !== undefined) {
+			args.push("-CropX", String(crop.x));
+			args.push("-CropY", String(crop.y));
+			args.push("-CropWidth", String(crop.width));
+			args.push("-CropHeight", String(crop.height));
+		}
+
+		if (format !== undefined) {
+			args.push("-Format", format.toUpperCase());
+		}
+
+		if (quality !== undefined) {
+			args.push("-Quality", String(quality));
 		}
 
 		const child = execFile(
@@ -67,6 +93,7 @@ export function captureWindow(
 						error?: string;
 						image?: string;
 						title?: string;
+						processName?: string;
 					};
 					if (result.error) {
 						reject(new Error(result.error));
@@ -78,7 +105,8 @@ export function captureWindow(
 					}
 					resolve_({
 						base64: result.image,
-						windowTitle: result.title || windowTitle,
+						windowTitle: result.title || windowTitle || "",
+						processName: result.processName || undefined,
 					});
 				} catch {
 					const base64 = extractBase64Payload(output);
@@ -86,7 +114,7 @@ export function captureWindow(
 						reject(new Error("Failed to parse screenshot output"));
 						return;
 					}
-					resolve_({ base64, windowTitle });
+					resolve_({ base64, windowTitle: windowTitle || "" });
 				}
 			},
 		);

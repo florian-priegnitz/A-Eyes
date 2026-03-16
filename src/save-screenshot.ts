@@ -14,25 +14,27 @@ export function sanitizeForFilename(title: string): string {
 }
 
 /**
- * Generate a timestamped filename: {SanitizedTitle}_{YYYYMMDD}_{HHmmss}.png
+ * Generate a timestamped filename: {SanitizedTitle}_{YYYYMMDD}_{HHmmss}.{ext}
  */
-export function generateFilename(title: string, now = new Date()): string {
+export function generateFilename(title: string, format?: "png" | "jpeg", now = new Date()): string {
 	const sanitized = sanitizeForFilename(title);
 	const pad = (n: number) => String(n).padStart(2, "0");
 	const date = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
 	const time = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-	return `${sanitized}_${date}_${time}.png`;
+	const ext = format === "jpeg" ? "jpg" : "png";
+	return `${sanitized}_${date}_${time}.${ext}`;
 }
 
 /**
- * Resolve the output path. If `path` looks like a directory (no .png extension),
- * append a generated filename. Otherwise use as-is.
+ * Resolve the output path. If `path` looks like an image file (.png/.jpg/.jpeg),
+ * use as-is. Otherwise treat as directory and append a generated filename.
  */
-export function resolveOutputPath(path: string, title: string): string {
-	if (extname(path).toLowerCase() === ".png") {
+export function resolveOutputPath(path: string, title: string, format?: "png" | "jpeg"): string {
+	const ext = extname(path).toLowerCase();
+	if (ext === ".png" || ext === ".jpg" || ext === ".jpeg") {
 		return path;
 	}
-	return join(path, generateFilename(title));
+	return join(path, generateFilename(title, format));
 }
 
 /**
