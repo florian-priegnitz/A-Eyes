@@ -82,6 +82,10 @@ export function isWindowAllowed(
 	if (!config.allowlist || config.allowlist.length === 0) {
 		return false;
 	}
+	// Screen captures use the sentinel title "__screen__" and require an exact allowlist entry.
+	if (windowTitle === "__screen__") {
+		return config.allowlist.includes("__screen__");
+	}
 	const lowerTitle = windowTitle?.toLowerCase() ?? "";
 	const lowerProcess = processName?.toLowerCase() ?? "";
 	return config.allowlist.some((pattern) => {

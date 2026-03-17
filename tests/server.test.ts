@@ -265,7 +265,7 @@ describe("createServer", () => {
 		expect(writeAuditEntryMock).toHaveBeenCalledTimes(1);
 		const entry = writeAuditEntryMock.mock.calls[0][0];
 		expect(entry.tool).toBe("capture");
-		expect(entry.params).toEqual({ window_title: "Chrome" });
+		expect(entry.params).toEqual({ window_title: "Chrome", process_name: undefined, mode: "window" });
 		expect(entry.result).toBe("success");
 		expect(entry.duration_ms).toBeGreaterThanOrEqual(0);
 	});
@@ -341,7 +341,7 @@ describe("createServer", () => {
 		expect(writeAuditEntryMock).toHaveBeenCalledTimes(1);
 		const entry = writeAuditEntryMock.mock.calls[0][0];
 		expect(entry.tool).toBe("query");
-		expect(entry.params).toEqual({ window_title: "Chrome", question: "What color?" });
+		expect(entry.params).toEqual({ window_title: "Chrome", process_name: undefined, question: "What color?", mode: "window" });
 		expect(entry.result).toBe("success");
 	});
 
@@ -425,6 +425,7 @@ describe("createServer", () => {
 			undefined,
 			undefined,
 			undefined,
+			"window",
 		);
 	});
 
@@ -450,6 +451,7 @@ describe("createServer", () => {
 			undefined,
 			undefined,
 			undefined,
+			"window",
 		);
 	});
 
@@ -479,6 +481,7 @@ describe("createServer", () => {
 			undefined,
 			undefined,
 			undefined,
+			"window",
 		);
 	});
 
@@ -499,6 +502,7 @@ describe("createServer", () => {
 			undefined,
 			undefined,
 			undefined,
+			"window",
 		);
 	});
 
@@ -519,6 +523,7 @@ describe("createServer", () => {
 			undefined,
 			undefined,
 			undefined,
+			"window",
 		);
 	});
 
@@ -696,6 +701,7 @@ describe("createServer", () => {
 			"chrome",
 			undefined,
 			undefined,
+			"window",
 		);
 		expect(isWindowAllowedMock).toHaveBeenCalledWith(expect.anything(), undefined, "chrome");
 	});
@@ -722,6 +728,7 @@ describe("createServer", () => {
 			"chrome",
 			undefined,
 			undefined,
+			"window",
 		);
 	});
 
@@ -743,6 +750,7 @@ describe("createServer", () => {
 			undefined,
 			undefined,
 			undefined,
+			"window",
 		);
 		const imageContent = result.content.find((c) => c.type === "image");
 		expect(imageContent?.data).toBe("ZmFrZQ==");
@@ -766,6 +774,7 @@ describe("createServer", () => {
 			undefined,
 			undefined,
 			undefined,
+			"window",
 		);
 		const imageContent = result.content.find((c) => c.type === "image");
 		expect(imageContent?.data).toBe("ZmFrZQ==");
@@ -835,6 +844,7 @@ describe("createServer", () => {
 			undefined,
 			"jpeg",
 			75,
+			"window",
 		);
 		const imageContent = result.content.find((c) => c.type === "image");
 		expect(imageContent?.mimeType).toBe("image/jpeg");
@@ -875,6 +885,7 @@ describe("createServer", () => {
 			undefined,
 			"jpeg",
 			60,
+			"window",
 		);
 		const imageContent = result.content.find((c) => c.type === "image");
 		expect(imageContent?.mimeType).toBe("image/jpeg");
@@ -916,6 +927,7 @@ describe("createServer", () => {
 			"Unity",
 			undefined,
 			undefined,
+			"window",
 		);
 	});
 

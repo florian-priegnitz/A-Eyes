@@ -24,7 +24,10 @@ param(
     [string]$Format = "PNG",
 
     [Parameter(Mandatory=$false)]
-    [int]$Quality = 85
+    [int]$Quality = 85,
+
+    [Parameter(Mandatory=$false)]
+    [string]$Mode = "window"
 )
 
 # Ensure errors produce clean JSON output
@@ -95,134 +98,160 @@ public class Win32 {
 # Enable DPI awareness for accurate window dimensions
 [Win32]::SetProcessDPIAware() | Out-Null
 
-# Find window by title and/or process name
+# Capture variables
 $foundHandle = [IntPtr]::Zero
 $foundTitle = ""
 $foundProcessName = ""
 $foundProcessId = 0
-$hasTitle = -not [string]::IsNullOrEmpty($WindowTitle)
-$hasProcess = -not [string]::IsNullOrEmpty($ProcessName)
+$width = 0
+$height = 0
+$screenCaptureLeft = 0
+$screenCaptureTop = 0
+$useScreenCapture = $false
 
-if (-not $hasTitle -and -not $hasProcess) {
-    # No filter given: capture the foreground (active) window
-    $foundHandle = [Win32]::GetForegroundWindow()
-    if ($foundHandle -eq [IntPtr]::Zero) {
-        Write-JsonError "No foreground window found"
-    }
-    $length = [Win32]::GetWindowTextLength($foundHandle)
-    if ($length -gt 0) {
-        $sb = New-Object System.Text.StringBuilder($length + 1)
-        [Win32]::GetWindowText($foundHandle, $sb, $sb.Capacity) | Out-Null
-        $foundTitle = $sb.ToString()
-    }
+if ($Mode -eq "screen") {
+    # Full-screen capture: use primary screen bounds
+    $screenBounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+    $width = $screenBounds.Width
+    $height = $screenBounds.Height
+    $foundTitle = "__screen__"
+    $foundProcessName = ""
+    $foundProcessId = 0
+    $useScreenCapture = $true
 } else {
-    if ($hasTitle) {
-        $windowTitlePattern = "*$([System.Management.Automation.WildcardPattern]::Escape($WindowTitle))*"
-    }
+    # Find window by title and/or process name
+    $hasTitle = -not [string]::IsNullOrEmpty($WindowTitle)
+    $hasProcess = -not [string]::IsNullOrEmpty($ProcessName)
 
-    $callback = [Win32+EnumWindowsProc]{
-        param($hWnd, $lParam)
-
-        if (-not [Win32]::IsWindowVisible($hWnd)) { return $true }
-
-        $length = [Win32]::GetWindowTextLength($hWnd)
-        if ($length -eq 0) { return $true }
-
-        $sb = New-Object System.Text.StringBuilder($length + 1)
-        [Win32]::GetWindowText($hWnd, $sb, $sb.Capacity) | Out-Null
-        $title = $sb.ToString()
-
-        # Check title match (if required)
-        $titleMatch = $true
-        if ($script:hasTitle) {
-            $titleMatch = $title -like $script:windowTitlePattern
+    if (-not $hasTitle -and -not $hasProcess) {
+        # No filter given: capture the foreground (active) window
+        $foundHandle = [Win32]::GetForegroundWindow()
+        if ($foundHandle -eq [IntPtr]::Zero) {
+            Write-JsonError "No foreground window found"
+        }
+        $length = [Win32]::GetWindowTextLength($foundHandle)
+        if ($length -gt 0) {
+            $sb = New-Object System.Text.StringBuilder($length + 1)
+            [Win32]::GetWindowText($foundHandle, $sb, $sb.Capacity) | Out-Null
+            $foundTitle = $sb.ToString()
+        }
+    } else {
+        if ($hasTitle) {
+            $windowTitlePattern = "*$([System.Management.Automation.WildcardPattern]::Escape($WindowTitle))*"
         }
 
-        # Check process name match (if required)
-        $processMatch = $true
-        $procName = ""
-        $procId = 0
-        if ($script:hasProcess) {
-            $wpid = [uint32]0
-            [Win32]::GetWindowThreadProcessId($hWnd, [ref]$wpid) | Out-Null
-            $procId = [int]$wpid
-            try {
-                $proc = [System.Diagnostics.Process]::GetProcessById($wpid)
-                $procName = $proc.ProcessName
-            } catch {
-                $procName = ""
+        $callback = [Win32+EnumWindowsProc]{
+            param($hWnd, $lParam)
+
+            if (-not [Win32]::IsWindowVisible($hWnd)) { return $true }
+
+            $length = [Win32]::GetWindowTextLength($hWnd)
+            if ($length -eq 0) { return $true }
+
+            $sb = New-Object System.Text.StringBuilder($length + 1)
+            [Win32]::GetWindowText($hWnd, $sb, $sb.Capacity) | Out-Null
+            $title = $sb.ToString()
+
+            # Check title match (if required)
+            $titleMatch = $true
+            if ($script:hasTitle) {
+                $titleMatch = $title -like $script:windowTitlePattern
             }
-            $processMatch = $procName -eq $script:ProcessName
-        }
 
-        # Both must match (AND logic)
-        if ($titleMatch -and $processMatch) {
-            $script:foundHandle = $hWnd
-            $script:foundTitle = $title
-            if ($procName -ne "") {
-                $script:foundProcessName = $procName
-                $script:foundProcessId = $procId
+            # Check process name match (if required)
+            $processMatch = $true
+            $procName = ""
+            $procId = 0
+            if ($script:hasProcess) {
+                $wpid = [uint32]0
+                [Win32]::GetWindowThreadProcessId($hWnd, [ref]$wpid) | Out-Null
+                $procId = [int]$wpid
+                try {
+                    $proc = [System.Diagnostics.Process]::GetProcessById($wpid)
+                    $procName = $proc.ProcessName
+                } catch {
+                    $procName = ""
+                }
+                $processMatch = $procName -eq $script:ProcessName
             }
-            return $false  # Stop enumerating
+
+            # Both must match (AND logic)
+            if ($titleMatch -and $processMatch) {
+                $script:foundHandle = $hWnd
+                $script:foundTitle = $title
+                if ($procName -ne "") {
+                    $script:foundProcessName = $procName
+                    $script:foundProcessId = $procId
+                }
+                return $false  # Stop enumerating
+            }
+            return $true
         }
-        return $true
-    }
 
-    [Win32]::EnumWindows($callback, [IntPtr]::Zero) | Out-Null
+        [Win32]::EnumWindows($callback, [IntPtr]::Zero) | Out-Null
 
-    if ($foundHandle -eq [IntPtr]::Zero) {
-        if ($hasTitle -and $hasProcess) {
-            Write-JsonError "Window not found matching title '$WindowTitle' and process '$ProcessName'"
-        } elseif ($hasTitle) {
-            Write-JsonError "Window not found: '$WindowTitle'"
-        } else {
-            Write-JsonError "No window found for process: '$ProcessName'"
+        if ($foundHandle -eq [IntPtr]::Zero) {
+            if ($hasTitle -and $hasProcess) {
+                Write-JsonError "Window not found matching title '$WindowTitle' and process '$ProcessName'"
+            } elseif ($hasTitle) {
+                Write-JsonError "Window not found: '$WindowTitle'"
+            } else {
+                Write-JsonError "No window found for process: '$ProcessName'"
+            }
         }
     }
-}
 
-# Get process info if not already resolved (title-only match)
-if ([string]::IsNullOrEmpty($foundProcessName)) {
-    $wpid = [uint32]0
-    [Win32]::GetWindowThreadProcessId($foundHandle, [ref]$wpid) | Out-Null
-    $foundProcessId = [int]$wpid
-    try {
-        $proc = [System.Diagnostics.Process]::GetProcessById($wpid)
-        $foundProcessName = $proc.ProcessName
-    } catch {
-        $foundProcessName = "unknown"
+    # Get process info if not already resolved (title-only match)
+    if ([string]::IsNullOrEmpty($foundProcessName)) {
+        $wpid = [uint32]0
+        [Win32]::GetWindowThreadProcessId($foundHandle, [ref]$wpid) | Out-Null
+        $foundProcessId = [int]$wpid
+        try {
+            $proc = [System.Diagnostics.Process]::GetProcessById($wpid)
+            $foundProcessName = $proc.ProcessName
+        } catch {
+            $foundProcessName = "unknown"
+        }
+    }
+
+    # Get window dimensions
+    $rect = New-Object Win32+RECT
+    if (-not [Win32]::GetWindowRect($foundHandle, [ref]$rect)) {
+        Write-JsonError "Failed to get window dimensions"
+    }
+
+    $width = $rect.Right - $rect.Left
+    $height = $rect.Bottom - $rect.Top
+    $screenCaptureLeft = $rect.Left
+    $screenCaptureTop = $rect.Top
+
+    if ($width -le 0 -or $height -le 0) {
+        Write-JsonError "Window has invalid dimensions (${width}x${height})"
     }
 }
 
-# Get window dimensions
-$rect = New-Object Win32+RECT
-if (-not [Win32]::GetWindowRect($foundHandle, [ref]$rect)) {
-    Write-JsonError "Failed to get window dimensions"
-}
-
-$width = $rect.Right - $rect.Left
-$height = $rect.Bottom - $rect.Top
-
-if ($width -le 0 -or $height -le 0) {
-    Write-JsonError "Window has invalid dimensions (${width}x${height})"
-}
-
-# Capture window using PrintWindow for better results with offscreen/overlapped windows
+# Capture the image (window or full screen)
 try {
     $bitmap = New-Object System.Drawing.Bitmap($width, $height)
     $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-    $hdc = $graphics.GetHdc()
 
-    # PW_RENDERFULLCONTENT = 2 (captures even if window is partially occluded)
-    $captured = [Win32]::PrintWindow($foundHandle, $hdc, 2)
-    $graphics.ReleaseHdc($hdc)
+    if ($useScreenCapture) {
+        # Full-screen: copy directly from screen origin
+        $graphics.CopyFromScreen(0, 0, 0, 0, [System.Drawing.Size]::new($width, $height))
+    } else {
+        $hdc = $graphics.GetHdc()
 
-    if (-not $captured) {
-        # Fallback: bring window to front and use screen capture
-        [Win32]::SetForegroundWindow($foundHandle) | Out-Null
-        Start-Sleep -Milliseconds 100
+        # PW_RENDERFULLCONTENT = 2 (captures even if window is partially occluded)
+        $captured = [Win32]::PrintWindow($foundHandle, $hdc, 2)
+        $graphics.ReleaseHdc($hdc)
 
-        $graphics.CopyFromScreen($rect.Left, $rect.Top, 0, 0, [System.Drawing.Size]::new($width, $height))
+        if (-not $captured) {
+            # Fallback: bring window to front and use screen capture
+            [Win32]::SetForegroundWindow($foundHandle) | Out-Null
+            Start-Sleep -Milliseconds 100
+
+            $graphics.CopyFromScreen($screenCaptureLeft, $screenCaptureTop, 0, 0, [System.Drawing.Size]::new($width, $height))
+        }
     }
 
     # Crop if crop parameters are set

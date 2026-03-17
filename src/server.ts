@@ -97,16 +97,44 @@ export function createServer(): McpServer {
 				.max(100)
 				.optional()
 				.describe("JPEG quality 1-100 (default: 85). Ignored for PNG."),
+			mode: z
+				.enum(["window", "screen"])
+				.default("window")
+				.describe(
+					"Capture mode: 'window' (default) captures a specific window, 'screen' captures the full primary monitor. In screen mode, window_title and process_name are ignored. Screen capture requires '__screen__' in the allowlist.",
+				),
 		},
-		async ({ window_title, process_name, output_path, max_width, crop, format, quality }) => {
+		async ({ window_title, process_name, output_path, max_width, crop, format, quality, mode: rawMode }) => {
 			const startTime = Date.now();
-			const isFrontmost = !window_title && !process_name;
+			const mode = rawMode ?? "window";
+			const isScreen = mode === "screen";
+			const isFrontmost = !isScreen && !window_title && !process_name;
 
 			const cfg = await ensureConfig();
 
+			// For screen captures, check the allowlist using the __screen__ sentinel.
+			if (isScreen && !isWindowAllowed(cfg, "__screen__", undefined)) {
+				const message =
+					!cfg.allowlist || cfg.allowlist.length === 0
+						? "No allowlist configured. Use the setup tool to create one, or add an allowlist manually to a-eyes.config.json."
+						: "Screen capture is not enabled. Add '__screen__' to the allowlist in a-eyes.config.json to allow it.";
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "capture",
+					params: { mode },
+					result: "blocked",
+					duration_ms: Date.now() - startTime,
+					error: message,
+				}).catch((err) => console.error("Audit log error:", err));
+				return {
+					content: [{ type: "text", text: message }],
+					isError: true,
+				};
+			}
+
 			// For named windows, check the allowlist before capturing.
 			// For frontmost captures, the allowlist is checked after capture using the returned metadata.
-			if (!isFrontmost && !isWindowAllowed(cfg, window_title, process_name)) {
+			if (!isScreen && !isFrontmost && !isWindowAllowed(cfg, window_title, process_name)) {
 				const message =
 					!cfg.allowlist || cfg.allowlist.length === 0
 						? "No allowlist configured. Use the setup tool to create one, or add an allowlist manually to a-eyes.config.json."
@@ -152,6 +180,7 @@ export function createServer(): McpServer {
 					process_name,
 					format,
 					quality,
+					mode,
 				);
 
 				// For frontmost captures, check the allowlist against the actual window metadata.
@@ -189,7 +218,9 @@ export function createServer(): McpServer {
 					}
 				}
 
-				let statusText = `Screenshot of "${result.windowTitle}" captured successfully.`;
+				let statusText = isScreen
+					? "Full screen captured successfully."
+					: `Screenshot of "${result.windowTitle}" captured successfully.`;
 				if (savedPath) {
 					statusText += ` Saved to: ${savedPath}`;
 				}
@@ -200,7 +231,7 @@ export function createServer(): McpServer {
 				writeAuditEntry({
 					timestamp: new Date(startTime).toISOString(),
 					tool: "capture",
-					params: { window_title, process_name },
+					params: { window_title, process_name, mode },
 					result: "success",
 					duration_ms: Date.now() - startTime,
 				}).catch((err) => console.error("Audit log error:", err));
@@ -338,16 +369,44 @@ export function createServer(): McpServer {
 				.max(100)
 				.optional()
 				.describe("JPEG quality 1-100 (default: 85). Ignored for PNG."),
+			mode: z
+				.enum(["window", "screen"])
+				.default("window")
+				.describe(
+					"Capture mode: 'window' (default) captures a specific window, 'screen' captures the full primary monitor. In screen mode, window_title and process_name are ignored. Screen capture requires '__screen__' in the allowlist.",
+				),
 		},
-		async ({ window_title, process_name, question, max_width, crop, format, quality }) => {
+		async ({ window_title, process_name, question, max_width, crop, format, quality, mode: rawMode }) => {
 			const startTime = Date.now();
-			const isFrontmost = !window_title && !process_name;
+			const mode = rawMode ?? "window";
+			const isScreen = mode === "screen";
+			const isFrontmost = !isScreen && !window_title && !process_name;
 
 			const cfg = await ensureConfig();
 
+			// For screen captures, check the allowlist using the __screen__ sentinel.
+			if (isScreen && !isWindowAllowed(cfg, "__screen__", undefined)) {
+				const message =
+					!cfg.allowlist || cfg.allowlist.length === 0
+						? "No allowlist configured. Use the setup tool to create one, or add an allowlist manually to a-eyes.config.json."
+						: "Screen capture is not enabled. Add '__screen__' to the allowlist in a-eyes.config.json to allow it.";
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "query",
+					params: { mode, question },
+					result: "blocked",
+					duration_ms: Date.now() - startTime,
+					error: message,
+				}).catch((err) => console.error("Audit log error:", err));
+				return {
+					content: [{ type: "text", text: message }],
+					isError: true,
+				};
+			}
+
 			// For named windows, check the allowlist before capturing.
 			// For frontmost captures, the allowlist is checked after capture using the returned metadata.
-			if (!isFrontmost && !isWindowAllowed(cfg, window_title, process_name)) {
+			if (!isScreen && !isFrontmost && !isWindowAllowed(cfg, window_title, process_name)) {
 				const message =
 					!cfg.allowlist || cfg.allowlist.length === 0
 						? "No allowlist configured. Use the setup tool to create one, or add an allowlist manually to a-eyes.config.json."
@@ -393,6 +452,7 @@ export function createServer(): McpServer {
 					process_name,
 					format,
 					quality,
+					mode,
 				);
 
 				// For frontmost captures, check the allowlist against the actual window metadata.
@@ -415,10 +475,11 @@ export function createServer(): McpServer {
 					};
 				}
 
+				const captureDescription = isScreen ? "Full screen" : `Screenshot of "${result.windowTitle}"`;
 				writeAuditEntry({
 					timestamp: new Date(startTime).toISOString(),
 					tool: "query",
-					params: { window_title, process_name, question },
+					params: { window_title, process_name, question, mode },
 					result: "success",
 					duration_ms: Date.now() - startTime,
 				}).catch((err) => console.error("Audit log error:", err));
@@ -431,7 +492,7 @@ export function createServer(): McpServer {
 						},
 						{
 							type: "text",
-							text: `Screenshot of "${result.windowTitle}" captured. Please answer the following question about this screenshot:\n\n${question}`,
+							text: `${captureDescription} captured. Please answer the following question about this screenshot:\n\n${question}`,
 						},
 					],
 				};
