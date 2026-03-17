@@ -268,6 +268,40 @@ Screenshots              Screenshots
 
 ---
 
+## Phase 4b — Unity Plugin (parallel zu Phase 4)
+
+**Ziel:** Claude Code sieht Unity — Compile-Fehler, Szenen-Hierarchie, Play Mode.
+**Aufwand:** Phase 1 ~3 Tage, Phase 2 nach IPC-Design
+**GitHub Issues:** #23 (Phase 1), #24 (Phase 2)
+**Vollständige Spezifikation:** [docs/unity-plugin.md](unity-plugin.md)
+
+### Warum konservativ vorgehen
+
+Phase 2 (compile, play, exec) hat ein ungelöstes IPC-Problem: `Unity.exe -executeMethod` öffnet einen *neuen* Prozess — es kann keinen laufenden Editor steuern. Phase 2 wird erst begonnen wenn das IPC-Design steht. Phase 1 ist vollständig sicher.
+
+### Phase 1 (scope:next) — read-only, sicher — #23
+
+Plugin nur aktiv wenn `plugins.unity.enabled: true` — kein Overhead ohne Config.
+
+| Tool | Was es tut | Zugriff |
+|------|-----------|---------|
+| `unity_console` | Editor.log parsen: Compile-Fehler, Warnings, Exceptions | Direkter File-Read via `/mnt/c/` |
+| `unity_scene` | `.unity`/`.prefab` YAML → strukturierte GameObject-Hierarchie | Direkter File-Read + YAML-Preprocessing |
+
+**Unity YAML Preprocessing:** `%TAG !u!`-Direktiven und `!u!NNN`-Typ-Tags vor dem Parsen entfernen (3 Regex-Replacements) — kein Unity-spezifischer YAML-Parser nötig.
+
+### Phase 2 (scope:future) — Actions, erst nach IPC-Design — #24
+
+| Tool | Was es tut |
+|------|-----------|
+| `unity_compile` | Recompile triggern, Fehler strukturiert zurückgeben |
+| `unity_play` | Play / Stop / Pause / Step |
+| `unity_exec` | Statische C#-Methoden aufrufen (gated by `allowed_methods` Allowlist) |
+
+**IPC-Optionen:** (a) Command-File-Polling via `EditorApplication.update` (~500ms, empfohlen), (b) TCP-Socket im Bridge-Script, (c) FileSystemWatcher im Bridge-Script. Entscheidung vor Implementierungsbeginn.
+
+---
+
 ## Phase 5 — Distribution & Community (v1.0.0)
 
 **Ziel:** A-Eyes für andere nutzbar und auffindbar machen.
