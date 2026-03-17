@@ -725,26 +725,86 @@ describe("createServer", () => {
 		);
 	});
 
-	it("returns error when neither window_title nor process_name provided", async () => {
+	it("captures frontmost window when neither window_title nor process_name provided", async () => {
+		loadConfigMock.mockResolvedValue({});
+		isWindowAllowedMock.mockReturnValue(true);
+		captureWindowMock.mockResolvedValue({ base64: "ZmFrZQ==", windowTitle: "Chrome" });
+
+		const server = createServer();
+		const capture = getToolHandler(server, "capture");
+		const result = await capture({});
+
+		expect(result.isError).toBeUndefined();
+		expect(captureWindowMock).toHaveBeenCalledWith(
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+		);
+		const imageContent = result.content.find((c) => c.type === "image");
+		expect(imageContent?.data).toBe("ZmFrZQ==");
+	});
+
+	it("captures frontmost window for query when neither window_title nor process_name provided", async () => {
+		loadConfigMock.mockResolvedValue({});
+		isWindowAllowedMock.mockReturnValue(true);
+		captureWindowMock.mockResolvedValue({ base64: "ZmFrZQ==", windowTitle: "Chrome" });
+
+		const server = createServer();
+		const query = getToolHandler(server, "query");
+		const result = await query({ question: "What?" });
+
+		expect(result.isError).toBeUndefined();
+		expect(captureWindowMock).toHaveBeenCalledWith(
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+		);
+		const imageContent = result.content.find((c) => c.type === "image");
+		expect(imageContent?.data).toBe("ZmFrZQ==");
+	});
+
+	it("blocks frontmost capture when returned window is not in allowlist", async () => {
+		loadConfigMock.mockResolvedValue({ allowlist: ["VS Code"] });
+		isWindowAllowedMock.mockReturnValue(false);
+		captureWindowMock.mockResolvedValue({
+			base64: "ZmFrZQ==",
+			windowTitle: "Chrome",
+			processName: "chrome",
+		});
+
 		const server = createServer();
 		const capture = getToolHandler(server, "capture");
 		const result = await capture({});
 
 		expect(result.isError).toBe(true);
-		expect(result.content[0]?.text).toContain(
-			"At least one of window_title or process_name must be provided",
-		);
+		expect(result.content[0]?.text).toContain("not in the allowlist");
+		expect(result.content[0]?.text).toContain("Chrome");
 	});
 
-	it("returns error from query when neither window_title nor process_name provided", async () => {
+	it("blocks frontmost query when returned window is not in allowlist", async () => {
+		loadConfigMock.mockResolvedValue({ allowlist: ["VS Code"] });
+		isWindowAllowedMock.mockReturnValue(false);
+		captureWindowMock.mockResolvedValue({
+			base64: "ZmFrZQ==",
+			windowTitle: "Chrome",
+			processName: "chrome",
+		});
+
 		const server = createServer();
 		const query = getToolHandler(server, "query");
 		const result = await query({ question: "What?" });
 
 		expect(result.isError).toBe(true);
-		expect(result.content[0]?.text).toContain(
-			"At least one of window_title or process_name must be provided",
-		);
+		expect(result.content[0]?.text).toContain("not in the allowlist");
+		expect(result.content[0]?.text).toContain("Chrome");
 	});
 
 	it("passes process_name to isWindowAllowed for allowlist check", async () => {
@@ -994,16 +1054,49 @@ describe("createServer", () => {
 	// --- see tool tests ---
 
 	describe("see tool", () => {
-		it("returns error when neither window_title nor process_name provided", async () => {
+		it("inspects frontmost window when neither window_title nor process_name provided", async () => {
+			loadConfigMock.mockResolvedValue({});
+			isWindowAllowedMock.mockReturnValue(true);
+			seeWindowMock.mockResolvedValue({
+				windowTitle: "Chrome",
+				processName: "chrome",
+				windowWidth: 1200,
+				windowHeight: 800,
+				elementCount: 0,
+				elements: [],
+				text: "",
+				image: undefined,
+			});
+
+			const server = createServer();
+			const see = getToolHandler(server, "see");
+			const result = await see({});
+
+			expect(result.isError).toBeUndefined();
+			expect(seeWindowMock).toHaveBeenCalledWith(undefined, undefined);
+		});
+
+		it("blocks frontmost see when returned window is not in allowlist", async () => {
+			loadConfigMock.mockResolvedValue({ allowlist: ["VS Code"] });
+			isWindowAllowedMock.mockReturnValue(false);
+			seeWindowMock.mockResolvedValue({
+				windowTitle: "Chrome",
+				processName: "chrome",
+				windowWidth: 1200,
+				windowHeight: 800,
+				elementCount: 0,
+				elements: [],
+				text: "",
+				image: undefined,
+			});
+
 			const server = createServer();
 			const see = getToolHandler(server, "see");
 			const result = await see({});
 
 			expect(result.isError).toBe(true);
-			expect(result.content[0]?.text).toContain(
-				"At least one of window_title or process_name must be provided",
-			);
-			expect(seeWindowMock).not.toHaveBeenCalled();
+			expect(result.content[0]?.text).toContain("not in the allowlist");
+			expect(result.content[0]?.text).toContain("Chrome");
 		});
 
 		it("returns blocked when window is not in allowlist", async () => {

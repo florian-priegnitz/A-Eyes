@@ -30,12 +30,6 @@ param(
 # Ensure errors produce clean JSON output
 $ErrorActionPreference = "Stop"
 
-if ([string]::IsNullOrEmpty($WindowTitle) -and [string]::IsNullOrEmpty($ProcessName)) {
-    $result = @{ error = "At least one of -WindowTitle or -ProcessName must be provided" } | ConvertTo-Json -Compress
-    Write-Output $result
-    exit 1
-}
-
 function Write-JsonError {
     param([string]$Message)
     $result = @{ error = $Message } | ConvertTo-Json -Compress
@@ -83,6 +77,9 @@ public class Win32 {
     [DllImport("user32.dll")]
     public static extern bool PrintWindow(IntPtr hWnd, IntPtr hdcBlt, uint nFlags);
 
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+
     public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
     [StructLayout(LayoutKind.Sequential)]
@@ -106,67 +103,81 @@ $foundProcessId = 0
 $hasTitle = -not [string]::IsNullOrEmpty($WindowTitle)
 $hasProcess = -not [string]::IsNullOrEmpty($ProcessName)
 
-if ($hasTitle) {
-    $windowTitlePattern = "*$([System.Management.Automation.WildcardPattern]::Escape($WindowTitle))*"
-}
-
-$callback = [Win32+EnumWindowsProc]{
-    param($hWnd, $lParam)
-
-    if (-not [Win32]::IsWindowVisible($hWnd)) { return $true }
-
-    $length = [Win32]::GetWindowTextLength($hWnd)
-    if ($length -eq 0) { return $true }
-
-    $sb = New-Object System.Text.StringBuilder($length + 1)
-    [Win32]::GetWindowText($hWnd, $sb, $sb.Capacity) | Out-Null
-    $title = $sb.ToString()
-
-    # Check title match (if required)
-    $titleMatch = $true
-    if ($script:hasTitle) {
-        $titleMatch = $title -like $script:windowTitlePattern
+if (-not $hasTitle -and -not $hasProcess) {
+    # No filter given: capture the foreground (active) window
+    $foundHandle = [Win32]::GetForegroundWindow()
+    if ($foundHandle -eq [IntPtr]::Zero) {
+        Write-JsonError "No foreground window found"
+    }
+    $length = [Win32]::GetWindowTextLength($foundHandle)
+    if ($length -gt 0) {
+        $sb = New-Object System.Text.StringBuilder($length + 1)
+        [Win32]::GetWindowText($foundHandle, $sb, $sb.Capacity) | Out-Null
+        $foundTitle = $sb.ToString()
+    }
+} else {
+    if ($hasTitle) {
+        $windowTitlePattern = "*$([System.Management.Automation.WildcardPattern]::Escape($WindowTitle))*"
     }
 
-    # Check process name match (if required)
-    $processMatch = $true
-    $procName = ""
-    $procId = 0
-    if ($script:hasProcess) {
-        $wpid = [uint32]0
-        [Win32]::GetWindowThreadProcessId($hWnd, [ref]$wpid) | Out-Null
-        $procId = [int]$wpid
-        try {
-            $proc = [System.Diagnostics.Process]::GetProcessById($wpid)
-            $procName = $proc.ProcessName
-        } catch {
-            $procName = ""
+    $callback = [Win32+EnumWindowsProc]{
+        param($hWnd, $lParam)
+
+        if (-not [Win32]::IsWindowVisible($hWnd)) { return $true }
+
+        $length = [Win32]::GetWindowTextLength($hWnd)
+        if ($length -eq 0) { return $true }
+
+        $sb = New-Object System.Text.StringBuilder($length + 1)
+        [Win32]::GetWindowText($hWnd, $sb, $sb.Capacity) | Out-Null
+        $title = $sb.ToString()
+
+        # Check title match (if required)
+        $titleMatch = $true
+        if ($script:hasTitle) {
+            $titleMatch = $title -like $script:windowTitlePattern
         }
-        $processMatch = $procName -eq $script:ProcessName
-    }
 
-    # Both must match (AND logic)
-    if ($titleMatch -and $processMatch) {
-        $script:foundHandle = $hWnd
-        $script:foundTitle = $title
-        if ($procName -ne "") {
-            $script:foundProcessName = $procName
-            $script:foundProcessId = $procId
+        # Check process name match (if required)
+        $processMatch = $true
+        $procName = ""
+        $procId = 0
+        if ($script:hasProcess) {
+            $wpid = [uint32]0
+            [Win32]::GetWindowThreadProcessId($hWnd, [ref]$wpid) | Out-Null
+            $procId = [int]$wpid
+            try {
+                $proc = [System.Diagnostics.Process]::GetProcessById($wpid)
+                $procName = $proc.ProcessName
+            } catch {
+                $procName = ""
+            }
+            $processMatch = $procName -eq $script:ProcessName
         }
-        return $false  # Stop enumerating
+
+        # Both must match (AND logic)
+        if ($titleMatch -and $processMatch) {
+            $script:foundHandle = $hWnd
+            $script:foundTitle = $title
+            if ($procName -ne "") {
+                $script:foundProcessName = $procName
+                $script:foundProcessId = $procId
+            }
+            return $false  # Stop enumerating
+        }
+        return $true
     }
-    return $true
-}
 
-[Win32]::EnumWindows($callback, [IntPtr]::Zero) | Out-Null
+    [Win32]::EnumWindows($callback, [IntPtr]::Zero) | Out-Null
 
-if ($foundHandle -eq [IntPtr]::Zero) {
-    if ($hasTitle -and $hasProcess) {
-        Write-JsonError "Window not found matching title '$WindowTitle' and process '$ProcessName'"
-    } elseif ($hasTitle) {
-        Write-JsonError "Window not found: '$WindowTitle'"
-    } else {
-        Write-JsonError "No window found for process: '$ProcessName'"
+    if ($foundHandle -eq [IntPtr]::Zero) {
+        if ($hasTitle -and $hasProcess) {
+            Write-JsonError "Window not found matching title '$WindowTitle' and process '$ProcessName'"
+        } elseif ($hasTitle) {
+            Write-JsonError "Window not found: '$WindowTitle'"
+        } else {
+            Write-JsonError "No window found for process: '$ProcessName'"
+        }
     }
 }
 

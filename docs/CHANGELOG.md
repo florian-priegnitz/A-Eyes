@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `processes` MCP tool — lists running Windows processes with CPU usage, memory (MB), and PID. Supports `name` filter (substring), `limit` (default 30), and `sort_by` (`cpu`/`memory`). Implemented via `Get-Process` in PowerShell, audit-logged.
+- `clipboard` MCP tool — reads current Windows clipboard content (text → string, image → base64 PNG, or empty) and writes text to the clipboard. Implemented via `System.Windows.Forms.Clipboard` in PowerShell, no shell interpolation, audit-logged.
+- Frontmost window capture — `window_title` and `process_name` are now fully optional on `capture`, `see`, and `query`. When neither is provided, the tool captures the currently focused foreground window via `GetForegroundWindow()`. Allowlist check runs post-capture using the returned window metadata.
 - `see` MCP tool — captures a window screenshot and returns its full UI element tree (buttons, text fields, labels, menus, etc.) via Windows UI Automation, plus all visible text. Enables agents to understand application state structurally without asking a specific question.
 - New `src/see.ts` module and `scripts/see.ps1` — PowerShell-based UI Automation enumeration using `System.Windows.Automation`, returns elements with id, type, name, value, enabled state, and bounding rectangle.
 
