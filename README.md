@@ -126,7 +126,7 @@ A-Eyes searches for config in order: `./a-eyes.config.json` (cwd) → `<package-
 ## Testing
 
 ```bash
-pnpm test           # 146 tests across 10 files
+pnpm test           # 189 tests across 14 files
 pnpm lint           # Biome linter + formatter
 ```
 
