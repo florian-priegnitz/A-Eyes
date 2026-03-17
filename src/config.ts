@@ -6,8 +6,16 @@ import { z } from "zod";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
+const PolicySchema = z.object({
+	pattern: z.string(),
+	action: z.enum(["allow", "deny"]),
+});
+
+export type Policy = z.infer<typeof PolicySchema>;
+
 const ConfigSchema = z.object({
 	allowlist: z.array(z.string()).optional(),
+	policies: z.array(PolicySchema).optional(),
 	save_screenshots: z.boolean().default(false),
 	screenshot_dir: z.string().default("./screenshots"),
 	max_captures_per_minute: z.number().int().min(0).default(0),
@@ -79,20 +87,44 @@ export function isWindowAllowed(
 	windowTitle?: string,
 	processName?: string,
 ): boolean {
-	if (!config.allowlist || config.allowlist.length === 0) {
-		return false;
+	// Build effective policy list
+	let policies: Policy[];
+
+	if (config.policies && config.policies.length > 0) {
+		policies = config.policies;
+	} else if (config.allowlist && config.allowlist.length > 0) {
+		// Legacy: convert allowlist strings to allow policies (escaped for regex safety)
+		// + implicit catch-all deny at the end
+		policies = [
+			...config.allowlist.map((s) => ({
+				pattern: escapeRegex(s),
+				action: "allow" as const,
+			})),
+			{ pattern: ".*", action: "deny" as const },
+		];
+	} else {
+		return false; // no config → deny all
 	}
-	// Screen captures use the sentinel title "__screen__" and require an exact allowlist entry.
-	if (windowTitle === "__screen__") {
-		return config.allowlist.includes("__screen__");
+
+	const candidates = [windowTitle, processName].filter(
+		(s): s is string => s !== undefined && s !== "",
+	);
+
+	for (const policy of policies) {
+		let regex: RegExp;
+		try {
+			regex = new RegExp(policy.pattern, "i");
+		} catch {
+			continue; // skip invalid regex patterns
+		}
+		if (candidates.some((c) => regex.test(c))) {
+			return policy.action === "allow";
+		}
 	}
-	const lowerTitle = windowTitle?.toLowerCase() ?? "";
-	const lowerProcess = processName?.toLowerCase() ?? "";
-	return config.allowlist.some((pattern) => {
-		const lowerPattern = pattern.toLowerCase();
-		return (
-			(lowerTitle !== "" && lowerTitle.includes(lowerPattern)) ||
-			(lowerProcess !== "" && lowerProcess.includes(lowerPattern))
-		);
-	});
+
+	return false; // no match → deny by default
+}
+
+function escapeRegex(s: string): string {
+	return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

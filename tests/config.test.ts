@@ -109,6 +109,22 @@ describe("loadConfig", () => {
 
 		await expect(loadConfig(configPath)).rejects.toThrow(configPath);
 	});
+
+	it("loads valid config with policies", async () => {
+		const configPath = join(tempDir, "config.json");
+		await writeFile(
+			configPath,
+			JSON.stringify({
+				policies: [
+					{ pattern: ".*Password.*", action: "deny" },
+					{ pattern: "Chrome", action: "allow" },
+				],
+			}),
+		);
+		const config = await loadConfig(configPath);
+		expect(config.policies).toHaveLength(2);
+		expect(config.policies?.[0].action).toBe("deny");
+	});
 });
 
 describe("loadConfig search chain", () => {
@@ -221,5 +237,83 @@ describe("isWindowAllowed", () => {
 	it("blocks when no title or process provided", () => {
 		const config = { allowlist: ["Chrome"] };
 		expect(isWindowAllowed(config)).toBe(false);
+	});
+});
+
+describe("policy engine (policies format)", () => {
+	it("allows when pattern matches title", () => {
+		const config = { policies: [{ pattern: "^Chrome", action: "allow" as const }] };
+		expect(isWindowAllowed(config, "Chrome - New Tab")).toBe(true);
+	});
+
+	it("blocks when pattern does not match", () => {
+		const config = { policies: [{ pattern: "^Chrome", action: "allow" as const }] };
+		expect(isWindowAllowed(config, "Firefox")).toBe(false);
+	});
+
+	it("denies explicitly before broad allow (first-match-wins)", () => {
+		const config = {
+			policies: [
+				{ pattern: "Password", action: "deny" as const },
+				{ pattern: ".*", action: "allow" as const },
+			],
+		};
+		expect(isWindowAllowed(config, "Password Manager")).toBe(false);
+		expect(isWindowAllowed(config, "Notepad")).toBe(true);
+	});
+
+	it("denies when no policy matches", () => {
+		const config = {
+			policies: [{ pattern: "^Chrome", action: "allow" as const }],
+		};
+		expect(isWindowAllowed(config, "Firefox")).toBe(false);
+	});
+
+	it("matches against process name when title does not match", () => {
+		const config = {
+			policies: [{ pattern: "chrome", action: "allow" as const }],
+		};
+		expect(isWindowAllowed(config, "Some Window", "chrome")).toBe(true);
+	});
+
+	it("denies when process name matches deny rule", () => {
+		const config = {
+			policies: [
+				{ pattern: "keepass", action: "deny" as const },
+				{ pattern: ".*", action: "allow" as const },
+			],
+		};
+		expect(isWindowAllowed(config, "Some Title", "keepass")).toBe(false);
+	});
+
+	it("skips invalid regex patterns and continues", () => {
+		const config = {
+			policies: [
+				{ pattern: "[invalid", action: "allow" as const },
+				{ pattern: "Chrome", action: "allow" as const },
+			],
+		};
+		expect(isWindowAllowed(config, "Chrome")).toBe(true);
+	});
+
+	it("returns false for empty policies array", () => {
+		expect(isWindowAllowed({ policies: [] }, "Any Window")).toBe(false);
+	});
+
+	it("is case-insensitive", () => {
+		const config = { policies: [{ pattern: "CHROME", action: "allow" as const }] };
+		expect(isWindowAllowed(config, "google chrome")).toBe(true);
+	});
+
+	it("screen capture works via policy engine (no special case needed)", () => {
+		const config = { policies: [{ pattern: "__screen__", action: "allow" as const }] };
+		expect(isWindowAllowed(config, "__screen__")).toBe(true);
+		expect(isWindowAllowed(config, "regular window")).toBe(false);
+	});
+
+	it("legacy allowlist __screen__ still works", () => {
+		const config = { allowlist: ["__screen__"] };
+		expect(isWindowAllowed(config, "__screen__")).toBe(true);
+		expect(isWindowAllowed(config, "regular window")).toBe(false);
 	});
 });
