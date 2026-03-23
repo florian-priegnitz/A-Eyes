@@ -203,6 +203,27 @@ Use `/backlog` to manage issues from Claude Code.
 - Keep it simple — avoid over-engineering, start lean
 - Use agents for complex tasks — architect plans, coder implements, reviewer + security verify
 
+## Memory & Kontext
+
+### Cold Memory (PKB — projektübergreifend)
+Für vollständigen Kontext zu Florian Priegnitz und Arbeitskonventionen:
+Lies den Skill `my-ai-os` unter `~/projects/my-ai-os/SKILL.md` und folge
+den Routing-Anweisungen dort.
+
+Relevante Module für dieses Projekt:
+- `references/profile/identity.yaml` — Profil, Rollen, Positionierung
+- `references/knowledge/cca-exam-guide.yaml` — MCP-Integration (CCA Domain 2: Tool Design & MCP)
+- `references/knowledge/memory-architecture.yaml` — Dreistufige Memory-Architektur
+- `references/projects/a-eyes.yaml` — Projektstatus (falls vorhanden, sonst `_index.yaml`)
+
+### Hot Memory (Claude Code Built-in)
+Claude Code speichert automatisch Session-Kontext in `~/.claude/projects/`.
+Wird bei Session-Start injiziert — keine Konfiguration nötig.
+
+### Wissen destillieren
+Wenn sich in Sessions wiederkehrende Patterns, Konventionen oder Erkenntnisse
+zeigen: `/memory-promote` ausführen, um diese ins PKB zu übernehmen.
+
 ## References
 
 ### Primary
@@ -215,6 +236,11 @@ Use `/backlog` to manage issues from Claude Code.
 - [mcporter](https://github.com/steipete/mcporter) — CLI to test MCP servers without Claude Desktop
 - [claude-code-mcp](https://github.com/steipete/claude-code-mcp) — MCP npm packaging reference
 - [osc-progress](https://github.com/steipete/osc-progress) — Terminal progress bars (Windows Terminal support)
+
+### Ecosystem (complementary MCP servers)
+- [Unity-MCP](https://github.com/IvanMurzak/Unity-MCP) — Unity Editor + Runtime MCP server, 100+ tools, screenshots, Roslyn script execute, custom tool extensibility
+- [mcp-unity](https://github.com/CoderGamester/mcp-unity) — Unity Editor MCP server, WebSocket bridge, scene/component manipulation
+- [ntfy-me-mcp](https://github.com/gitmotion/ntfy-me-mcp) — Push notifications via ntfy.sh
 
 ### Philosophy
 - [Shipping at Inference Speed](https://steipete.me/posts/2025/shipping-at-inference-speed) — Tech stack philosophy

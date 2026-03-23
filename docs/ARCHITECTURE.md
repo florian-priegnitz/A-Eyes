@@ -27,9 +27,10 @@ A-Eyes is an MCP server that provides screenshot capabilities to Claude Code on 
 ## Components
 
 ### MCP Server (`src/server.ts`)
-- Registers MCP tools (`capture`, `list_windows`, `query`)
-- Validates input parameters
-- Enforces allowlist (if configured)
+- Registers MCP tools (`capture`, `list_windows`, `query`, `see`, `check_status`, `clipboard`, `processes`)
+- Validates input parameters via Zod schemas
+- Enforces allowlist (deny-by-default) and regex policy engine
+- Audit-logs every tool call
 - Returns results in MCP format
 
 ### Capture Module (`src/capture.ts`)
@@ -61,6 +62,30 @@ A-Eyes is an MCP server that provides screenshot capabilities to Claude Code on 
 - Always active — no config toggle (security feature)
 - Non-blocking: log errors are caught and logged to stderr, never interrupt tool execution
 - No MCP tool exposure — logs are only accessible via filesystem (user-controlled)
+
+## Ecosystem
+
+A-Eyes is one of several MCP servers running in parallel in a Claude Code session. Each server has a distinct responsibility — A-Eyes does not attempt to be a monolith.
+
+```
+Claude Code Session
+  ├── MCP: A-Eyes         → Screenshots, UI Automation, Clipboard, Processes (this project)
+  ├── MCP: Unity-MCP      → Unity Editor + Runtime, 100+ tools (github.com/IvanMurzak/Unity-MCP)
+  ├── MCP: mcp-unity      → Unity Scene/Components/Tests (github.com/CoderGamester/mcp-unity)
+  ├── MCP: lsp-tap        → LSP Diagnostics Push (planned, github.com/florian-priegnitz/lsp-tap)
+  ├── MCP: sec-tap        → Tetragon eBPF Security Events Push (planned, github.com/florian-priegnitz/sec-tap)
+  └── MCP: ntfy-me-mcp    → Push Notifications via ntfy.sh (github.com/gitmotion/ntfy-me-mcp)
+```
+
+**A-Eyes' role in this ecosystem:**
+- Windows desktop perception (screenshots, UI trees, clipboard, processes)
+- Security-first architecture (deny-by-default allowlist, audit log, redaction) — planned for extraction as `@a-eyes/security` reusable package
+
+**What A-Eyes does NOT do:**
+- Unity Editor integration → Unity-MCP / mcp-unity
+- Language diagnostics → lsp-tap (planned)
+- Kernel security events → sec-tap (planned)
+- Push notifications → ntfy-me-mcp
 
 ## Key Design Decisions
 
