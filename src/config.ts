@@ -13,9 +13,27 @@ const PolicySchema = z.object({
 
 export type Policy = z.infer<typeof PolicySchema>;
 
+const RedactionRegionSchema = z.object({
+	x: z.number().int().min(0),
+	y: z.number().int().min(0),
+	width: z.number().int().min(1),
+	height: z.number().int().min(1),
+	method: z.enum(["blackout", "blur", "pixelate"]).default("blackout"),
+});
+
+export type RedactionRegion = z.infer<typeof RedactionRegionSchema>;
+
+const RedactionRuleSchema = z.object({
+	match: z.string(),
+	regions: z.array(RedactionRegionSchema).min(1),
+});
+
+export type RedactionRule = z.infer<typeof RedactionRuleSchema>;
+
 const ConfigSchema = z.object({
 	allowlist: z.array(z.string()).optional(),
 	policies: z.array(PolicySchema).optional(),
+	redaction_rules: z.array(RedactionRuleSchema).optional(),
 	save_screenshots: z.boolean().default(false),
 	screenshot_dir: z.string().default("./screenshots"),
 	max_captures_per_minute: z.number().int().min(0).default(0),

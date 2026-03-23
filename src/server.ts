@@ -9,6 +9,7 @@ import { runHealthCheck } from "./health-check.js";
 import { listWindows } from "./list-windows.js";
 import { getProcesses } from "./processes.js";
 import { RateLimiter } from "./rate-limiter.js";
+import { applyRedactions, findMatchingRules } from "./redact.js";
 import { resolveOutputPath, saveScreenshot } from "./save-screenshot.js";
 import { seeWindow } from "./see.js";
 import { detectExistingConfig, writeConfig } from "./setup.js";
@@ -212,6 +213,15 @@ export function createServer(): McpServer {
 						content: [{ type: "text", text: message }],
 						isError: true,
 					};
+				}
+
+				// Apply redaction if rules match
+				const redactionRegions = findMatchingRules(cfg, result.windowTitle, result.processName);
+				let redactedCount = 0;
+				if (redactionRegions.length > 0) {
+					const redactionResult = await applyRedactions(result.base64, redactionRegions);
+					result.base64 = redactionResult.base64;
+					redactedCount = redactionResult.redactedCount;
 				}
 
 				// Determine if/where to save
@@ -495,6 +505,17 @@ export function createServer(): McpServer {
 					};
 				}
 
+				// Apply redaction if rules match
+				const queryRedactionRegions = findMatchingRules(
+					cfg,
+					result.windowTitle,
+					result.processName,
+				);
+				if (queryRedactionRegions.length > 0) {
+					const redactionResult = await applyRedactions(result.base64, queryRedactionRegions);
+					result.base64 = redactionResult.base64;
+				}
+
 				const captureDescription = isScreen
 					? "Full screen"
 					: `Screenshot of "${result.windowTitle}"`;
@@ -657,9 +678,21 @@ export function createServer(): McpServer {
 				}).catch((err) => console.error("Audit log error:", err));
 
 				if (result.image) {
+					// Apply redaction if rules match
+					let imageData = result.image;
+					const seeRedactionRegions = findMatchingRules(
+						cfg,
+						result.windowTitle,
+						result.processName,
+					);
+					if (seeRedactionRegions.length > 0) {
+						const redactionResult = await applyRedactions(imageData, seeRedactionRegions);
+						imageData = redactionResult.base64;
+					}
+
 					return {
 						content: [
-							{ type: "image" as const, data: result.image, mimeType: "image/png" },
+							{ type: "image" as const, data: imageData, mimeType: "image/png" },
 							{ type: "text" as const, text: summaryText },
 						],
 					};
