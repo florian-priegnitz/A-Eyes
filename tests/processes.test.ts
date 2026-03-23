@@ -131,9 +131,7 @@ describe("processes module", () => {
 		});
 
 		const { getProcesses } = await import("../src/processes.js");
-		await expect(getProcesses({}, 5000)).rejects.toThrow(
-			"Process list timed out after 5000ms",
-		);
+		await expect(getProcesses({}, 5000)).rejects.toThrow("Process list timed out after 5000ms");
 	});
 
 	it("rejects on execFile error", async () => {

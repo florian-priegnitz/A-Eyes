@@ -1,16 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const {
-	getProcessesMock,
-	writeAuditEntryMock,
-	loadConfigMock,
-	isWindowAllowedMock,
-} = vi.hoisted(() => ({
-	getProcessesMock: vi.fn(),
-	writeAuditEntryMock: vi.fn(),
-	loadConfigMock: vi.fn(),
-	isWindowAllowedMock: vi.fn(),
-}));
+const { getProcessesMock, writeAuditEntryMock, loadConfigMock, isWindowAllowedMock } = vi.hoisted(
+	() => ({
+		getProcessesMock: vi.fn(),
+		writeAuditEntryMock: vi.fn(),
+		loadConfigMock: vi.fn(),
+		isWindowAllowedMock: vi.fn(),
+	}),
+);
 
 vi.mock("../src/processes.js", () => ({
 	getProcesses: getProcessesMock,
@@ -117,9 +114,7 @@ describe("server processes tool", () => {
 		const result = await processes({ name: "chrome", limit: 30, sort_by: "cpu" });
 
 		expect(result.isError).toBeFalsy();
-		expect(getProcessesMock).toHaveBeenCalledWith(
-			expect.objectContaining({ name: "chrome" }),
-		);
+		expect(getProcessesMock).toHaveBeenCalledWith(expect.objectContaining({ name: "chrome" }));
 		expect(result.content[0].text).toContain('filtered by "chrome"');
 	});
 
@@ -132,9 +127,7 @@ describe("server processes tool", () => {
 
 		await processes({ limit: 30, sort_by: "memory" });
 
-		expect(getProcessesMock).toHaveBeenCalledWith(
-			expect.objectContaining({ sortBy: "memory" }),
-		);
+		expect(getProcessesMock).toHaveBeenCalledWith(expect.objectContaining({ sortBy: "memory" }));
 	});
 
 	it("logs audit entry on success", async () => {

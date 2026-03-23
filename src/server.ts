@@ -3,10 +3,11 @@ import { z } from "zod";
 import { writeAuditEntry } from "./audit-log.js";
 import { captureWindow } from "./capture.js";
 import { readClipboard, writeClipboard } from "./clipboard.js";
-import { getProcesses } from "./processes.js";
 import { type AEyesConfig, isWindowAllowed, loadConfig } from "./config.js";
+import { getEventLog } from "./event-log.js";
 import { runHealthCheck } from "./health-check.js";
 import { listWindows } from "./list-windows.js";
+import { getProcesses } from "./processes.js";
 import { RateLimiter } from "./rate-limiter.js";
 import { resolveOutputPath, saveScreenshot } from "./save-screenshot.js";
 import { seeWindow } from "./see.js";
@@ -22,6 +23,7 @@ export function createServer(): McpServer {
 		save_screenshots: false,
 		screenshot_dir: "./screenshots",
 		max_captures_per_minute: 0,
+		allow_event_log: false,
 	};
 	let configLoaded = false;
 	let configLoadPromise: Promise<AEyesConfig> | null = null;
@@ -104,7 +106,16 @@ export function createServer(): McpServer {
 					"Capture mode: 'window' (default) captures a specific window, 'screen' captures the full primary monitor. In screen mode, window_title and process_name are ignored. Screen capture requires '__screen__' in the allowlist.",
 				),
 		},
-		async ({ window_title, process_name, output_path, max_width, crop, format, quality, mode: rawMode }) => {
+		async ({
+			window_title,
+			process_name,
+			output_path,
+			max_width,
+			crop,
+			format,
+			quality,
+			mode: rawMode,
+		}) => {
 			const startTime = Date.now();
 			const mode = rawMode ?? "window";
 			const isScreen = mode === "screen";
@@ -376,7 +387,16 @@ export function createServer(): McpServer {
 					"Capture mode: 'window' (default) captures a specific window, 'screen' captures the full primary monitor. In screen mode, window_title and process_name are ignored. Screen capture requires '__screen__' in the allowlist.",
 				),
 		},
-		async ({ window_title, process_name, question, max_width, crop, format, quality, mode: rawMode }) => {
+		async ({
+			window_title,
+			process_name,
+			question,
+			max_width,
+			crop,
+			format,
+			quality,
+			mode: rawMode,
+		}) => {
 			const startTime = Date.now();
 			const mode = rawMode ?? "window";
 			const isScreen = mode === "screen";
@@ -475,7 +495,9 @@ export function createServer(): McpServer {
 					};
 				}
 
-				const captureDescription = isScreen ? "Full screen" : `Screenshot of "${result.windowTitle}"`;
+				const captureDescription = isScreen
+					? "Full screen"
+					: `Screenshot of "${result.windowTitle}"`;
 				writeAuditEntry({
 					timestamp: new Date(startTime).toISOString(),
 					tool: "query",
@@ -998,6 +1020,117 @@ export function createServer(): McpServer {
 				}).catch((auditErr) => console.error("Audit log error:", auditErr));
 				return {
 					content: [{ type: "text", text: `Failed to list processes: ${message}` }],
+					isError: true,
+				};
+			}
+		},
+	);
+
+	// --- event_log tool ---
+	server.tool(
+		"event_log",
+		"Read recent entries from the Windows Event Log (Application, System). Useful for diagnosing crashes, service failures, driver issues, and .NET errors. Requires allow_event_log: true in config.",
+		{
+			source: z
+				.enum(["Application", "System", "both"])
+				.default("both")
+				.describe("Event log source (default: both)"),
+			count: z
+				.number()
+				.int()
+				.min(1)
+				.max(100)
+				.default(20)
+				.describe("Max entries to return (default: 20)"),
+			level: z
+				.enum(["error", "warning", "all"])
+				.default("error")
+				.describe("Minimum severity level (default: error)"),
+		},
+		async ({ source, count, level }) => {
+			const startTime = Date.now();
+			await ensureConfig();
+
+			if (!config.allow_event_log) {
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "event_log",
+					params: { source, count, level },
+					result: "denied",
+					duration_ms: Date.now() - startTime,
+					error: "event_log not enabled in config",
+				}).catch((err) => console.error("Audit log error:", err));
+				return {
+					content: [
+						{
+							type: "text",
+							text: 'Event log access is disabled. Set "allow_event_log": true in a-eyes.config.json to enable.',
+						},
+					],
+					isError: true,
+				};
+			}
+
+			try {
+				const entries = await getEventLog({ source, count, level });
+
+				if (entries.length === 0) {
+					writeAuditEntry({
+						timestamp: new Date(startTime).toISOString(),
+						tool: "event_log",
+						params: { source, count, level },
+						result: "success",
+						duration_ms: Date.now() - startTime,
+					}).catch((err) => console.error("Audit log error:", err));
+					return {
+						content: [
+							{
+								type: "text",
+								text: `No event log entries found (source: ${source}, level: ${level}).`,
+							},
+						],
+					};
+				}
+
+				const header =
+					"Timestamp                          Level      Provider                         Message";
+				const separator =
+					"--------------------------------   --------   ------------------------------   --------------------";
+				const rows = entries.map((e) => {
+					const ts = e.timestamp.slice(0, 23).padEnd(34);
+					const lvl = (e.level || "Unknown").slice(0, 8).padEnd(10);
+					const prov = (e.provider || "").slice(0, 30).padEnd(32);
+					const msg = (e.message || "").split("\n")[0].slice(0, 80);
+					return `${ts} ${lvl} ${prov} ${msg}`;
+				});
+
+				const tableText = [header, separator, ...rows].join("\n");
+				const jsonText = JSON.stringify(entries, null, 2);
+				const summaryText = `Found ${entries.length} event log entries (source: ${source}, level: ${level}):\n\n${tableText}\n\nRaw JSON:\n${jsonText}`;
+
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "event_log",
+					params: { source, count, level },
+					result: "success",
+					duration_ms: Date.now() - startTime,
+				}).catch((err) => console.error("Audit log error:", err));
+
+				return {
+					content: [{ type: "text", text: summaryText }],
+				};
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "event_log",
+					params: { source, count, level },
+					result: "error",
+					duration_ms: Date.now() - startTime,
+					error: message,
+				}).catch((auditErr) => console.error("Audit log error:", auditErr));
+				return {
+					content: [{ type: "text", text: `Failed to read event log: ${message}` }],
 					isError: true,
 				};
 			}

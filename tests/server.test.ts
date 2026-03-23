@@ -265,7 +265,11 @@ describe("createServer", () => {
 		expect(writeAuditEntryMock).toHaveBeenCalledTimes(1);
 		const entry = writeAuditEntryMock.mock.calls[0][0];
 		expect(entry.tool).toBe("capture");
-		expect(entry.params).toEqual({ window_title: "Chrome", process_name: undefined, mode: "window" });
+		expect(entry.params).toEqual({
+			window_title: "Chrome",
+			process_name: undefined,
+			mode: "window",
+		});
 		expect(entry.result).toBe("success");
 		expect(entry.duration_ms).toBeGreaterThanOrEqual(0);
 	});
@@ -341,7 +345,12 @@ describe("createServer", () => {
 		expect(writeAuditEntryMock).toHaveBeenCalledTimes(1);
 		const entry = writeAuditEntryMock.mock.calls[0][0];
 		expect(entry.tool).toBe("query");
-		expect(entry.params).toEqual({ window_title: "Chrome", process_name: undefined, question: "What color?", mode: "window" });
+		expect(entry.params).toEqual({
+			window_title: "Chrome",
+			process_name: undefined,
+			question: "What color?",
+			mode: "window",
+		});
 		expect(entry.result).toBe("success");
 	});
 
@@ -1314,6 +1323,93 @@ describe("createServer", () => {
 			expect(entry.tool).toBe("see");
 			expect(entry.result).toBe("error");
 			expect(entry.error).toBe("See failed");
+		});
+	});
+
+	describe("event_log tool", () => {
+		it("denies access when allow_event_log is false", async () => {
+			loadConfigMock.mockResolvedValue({
+				save_screenshots: false,
+				screenshot_dir: "./screenshots",
+				max_captures_per_minute: 0,
+				allow_event_log: false,
+			});
+
+			const server = createServer();
+			const eventLog = getToolHandler(server, "event_log");
+			const result = await eventLog({ source: "both", count: 20, level: "error" });
+
+			expect(result.isError).toBe(true);
+			expect(result.content[0].text).toContain("disabled");
+		});
+
+		it("returns event log entries when enabled", async () => {
+			loadConfigMock.mockResolvedValue({
+				save_screenshots: false,
+				screenshot_dir: "./screenshots",
+				max_captures_per_minute: 0,
+				allow_event_log: true,
+			});
+
+			const entries = [
+				{
+					timestamp: "2026-03-23T14:30:00Z",
+					level: "Error",
+					provider: "App Error",
+					message: "Crash",
+				},
+			];
+			execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+				callback(null, JSON.stringify(entries), "");
+				return { stdin: { end: vi.fn() } };
+			});
+
+			const server = createServer();
+			const eventLog = getToolHandler(server, "event_log");
+			const result = await eventLog({ source: "Application", count: 10, level: "error" });
+
+			expect(result.isError).toBeUndefined();
+			expect(result.content[0].text).toContain("Error");
+			expect(result.content[0].text).toContain("App Error");
+		});
+
+		it("handles empty results", async () => {
+			loadConfigMock.mockResolvedValue({
+				save_screenshots: false,
+				screenshot_dir: "./screenshots",
+				max_captures_per_minute: 0,
+				allow_event_log: true,
+			});
+
+			execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+				callback(null, "", "");
+				return { stdin: { end: vi.fn() } };
+			});
+
+			const server = createServer();
+			const eventLog = getToolHandler(server, "event_log");
+			const result = await eventLog({ source: "System", count: 20, level: "error" });
+
+			expect(result.isError).toBeUndefined();
+			expect(result.content[0].text).toContain("No event log entries found");
+		});
+
+		it("audit-logs denied access", async () => {
+			loadConfigMock.mockResolvedValue({
+				save_screenshots: false,
+				screenshot_dir: "./screenshots",
+				max_captures_per_minute: 0,
+				allow_event_log: false,
+			});
+
+			const server = createServer();
+			const eventLog = getToolHandler(server, "event_log");
+			await eventLog({ source: "both", count: 20, level: "error" });
+
+			expect(writeAuditEntryMock).toHaveBeenCalledTimes(1);
+			const entry = writeAuditEntryMock.mock.calls[0][0];
+			expect(entry.tool).toBe("event_log");
+			expect(entry.result).toBe("denied");
 		});
 	});
 });
