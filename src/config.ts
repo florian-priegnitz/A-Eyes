@@ -30,10 +30,32 @@ const RedactionRuleSchema = z.object({
 
 export type RedactionRule = z.infer<typeof RedactionRuleSchema>;
 
+const CustomToolParamSchema = z.object({
+	name: z.string(),
+	type: z.enum(["string", "number", "boolean"]).default("string"),
+	description: z.string().optional(),
+	required: z.boolean().default(false),
+});
+
+export type CustomToolParam = z.infer<typeof CustomToolParamSchema>;
+
+const CustomToolSchema = z.object({
+	name: z
+		.string()
+		.regex(/^[a-z][a-z0-9_]*$/, "Tool name must be lowercase alphanumeric with underscores"),
+	description: z.string(),
+	script: z.string(),
+	params: z.array(CustomToolParamSchema).optional(),
+	timeout_ms: z.number().int().min(1000).max(120000).default(15000),
+});
+
+export type CustomTool = z.infer<typeof CustomToolSchema>;
+
 const ConfigSchema = z.object({
 	allowlist: z.array(z.string()).optional(),
 	policies: z.array(PolicySchema).optional(),
 	redaction_rules: z.array(RedactionRuleSchema).optional(),
+	custom_tools: z.array(CustomToolSchema).optional(),
 	save_screenshots: z.boolean().default(false),
 	screenshot_dir: z.string().default("./screenshots"),
 	max_captures_per_minute: z.number().int().min(0).default(0),

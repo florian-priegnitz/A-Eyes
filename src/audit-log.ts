@@ -14,7 +14,8 @@ export interface AuditEntry {
 		| "see"
 		| "clipboard"
 		| "processes"
-		| "event_log";
+		| "event_log"
+		| "run_custom";
 	params: Record<string, unknown>;
 	result: "success" | "blocked" | "error" | "rate_limited" | "denied";
 	duration_ms: number;

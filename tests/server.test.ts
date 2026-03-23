@@ -1412,4 +1412,66 @@ describe("createServer", () => {
 			expect(entry.result).toBe("denied");
 		});
 	});
+
+	describe("run_custom tool", () => {
+		it("denies when no custom tools configured", async () => {
+			loadConfigMock.mockResolvedValue({
+				save_screenshots: false,
+				screenshot_dir: "./screenshots",
+				max_captures_per_minute: 0,
+				allow_event_log: false,
+			});
+
+			const server = createServer();
+			const runCustom = getToolHandler(server, "run_custom");
+			const result = await runCustom({ tool_name: "anything", params: {} });
+
+			expect(result.isError).toBe(true);
+			expect(result.content[0].text).toContain("No custom tools configured");
+		});
+
+		it("returns error when tool name not found", async () => {
+			loadConfigMock.mockResolvedValue({
+				save_screenshots: false,
+				screenshot_dir: "./screenshots",
+				max_captures_per_minute: 0,
+				allow_event_log: false,
+				custom_tools: [
+					{ name: "my_tool", description: "Test", script: "/path/to/test.ps1", timeout_ms: 15000 },
+				],
+			});
+
+			const server = createServer();
+			const runCustom = getToolHandler(server, "run_custom");
+			const result = await runCustom({ tool_name: "wrong_name", params: {} });
+
+			expect(result.isError).toBe(true);
+			expect(result.content[0].text).toContain("not found");
+			expect(result.content[0].text).toContain("my_tool");
+		});
+
+		it("runs custom tool and returns output", async () => {
+			loadConfigMock.mockResolvedValue({
+				save_screenshots: false,
+				screenshot_dir: "./screenshots",
+				max_captures_per_minute: 0,
+				allow_event_log: false,
+				custom_tools: [
+					{ name: "my_tool", description: "Test", script: __filename, timeout_ms: 15000 },
+				],
+			});
+
+			execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+				callback(null, '{"status":"ok"}', "");
+				return { stdin: { end: vi.fn() } };
+			});
+
+			const server = createServer();
+			const runCustom = getToolHandler(server, "run_custom");
+			const result = await runCustom({ tool_name: "my_tool", params: {} });
+
+			expect(result.isError).toBeUndefined();
+			expect(result.content[0].text).toContain("ok");
+		});
+	});
 });

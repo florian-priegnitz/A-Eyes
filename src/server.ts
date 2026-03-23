@@ -4,6 +4,7 @@ import { writeAuditEntry } from "./audit-log.js";
 import { captureWindow } from "./capture.js";
 import { readClipboard, writeClipboard } from "./clipboard.js";
 import { type AEyesConfig, isWindowAllowed, loadConfig } from "./config.js";
+import { runCustomTool, validateCustomTool } from "./custom-tool.js";
 import { getEventLog } from "./event-log.js";
 import { runHealthCheck } from "./health-check.js";
 import { listWindows } from "./list-windows.js";
@@ -1164,6 +1165,112 @@ export function createServer(): McpServer {
 				}).catch((auditErr) => console.error("Audit log error:", auditErr));
 				return {
 					content: [{ type: "text", text: `Failed to read event log: ${message}` }],
+					isError: true,
+				};
+			}
+		},
+	);
+
+	// --- run_custom tool ---
+	server.tool(
+		"run_custom",
+		"Run a custom PowerShell tool registered in a-eyes.config.json. Use list_custom_tools to see available tools.",
+		{
+			tool_name: z.string().describe("Name of the custom tool to run"),
+			params: z
+				.record(z.union([z.string(), z.number(), z.boolean()]))
+				.optional()
+				.default({})
+				.describe("Parameters to pass to the tool script"),
+		},
+		async ({ tool_name, params }) => {
+			const startTime = Date.now();
+			const cfg = await ensureConfig();
+
+			if (!cfg.custom_tools || cfg.custom_tools.length === 0) {
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "run_custom",
+					params: { tool_name },
+					result: "denied",
+					duration_ms: Date.now() - startTime,
+					error: "No custom tools configured",
+				}).catch((err) => console.error("Audit log error:", err));
+				return {
+					content: [
+						{
+							type: "text",
+							text: "No custom tools configured. Add custom_tools to a-eyes.config.json.",
+						},
+					],
+					isError: true,
+				};
+			}
+
+			const tool = cfg.custom_tools.find((t) => t.name === tool_name);
+			if (!tool) {
+				const available = cfg.custom_tools.map((t) => t.name).join(", ");
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "run_custom",
+					params: { tool_name },
+					result: "error",
+					duration_ms: Date.now() - startTime,
+					error: `Tool "${tool_name}" not found`,
+				}).catch((err) => console.error("Audit log error:", err));
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Custom tool "${tool_name}" not found. Available: ${available}`,
+						},
+					],
+					isError: true,
+				};
+			}
+
+			const validationError = await validateCustomTool(tool);
+			if (validationError) {
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "run_custom",
+					params: { tool_name, ...params },
+					result: "error",
+					duration_ms: Date.now() - startTime,
+					error: validationError,
+				}).catch((err) => console.error("Audit log error:", err));
+				return {
+					content: [{ type: "text", text: validationError }],
+					isError: true,
+				};
+			}
+
+			try {
+				const output = await runCustomTool(tool, params);
+
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "run_custom",
+					params: { tool_name, ...params },
+					result: "success",
+					duration_ms: Date.now() - startTime,
+				}).catch((err) => console.error("Audit log error:", err));
+
+				return {
+					content: [{ type: "text", text: output }],
+				};
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "run_custom",
+					params: { tool_name, ...params },
+					result: "error",
+					duration_ms: Date.now() - startTime,
+					error: message,
+				}).catch((auditErr) => console.error("Audit log error:", auditErr));
+				return {
+					content: [{ type: "text", text: `Custom tool failed: ${message}` }],
 					isError: true,
 				};
 			}
