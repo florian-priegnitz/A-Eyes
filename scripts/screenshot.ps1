@@ -83,6 +83,9 @@ public class Win32 {
     [DllImport("user32.dll")]
     public static extern IntPtr GetForegroundWindow();
 
+    [DllImport("dwmapi.dll")]
+    public static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out int pvAttribute, int cbAttribute);
+
     public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
     [StructLayout(LayoutKind.Sequential)]
@@ -140,6 +143,10 @@ if ($Mode -eq "screen") {
             $windowTitlePattern = "*$([System.Management.Automation.WildcardPattern]::Escape($WindowTitle))*"
         }
 
+        # Collect all matching windows; rank afterward to pick the best candidate
+        $candidates = [System.Collections.Generic.List[hashtable]]::new()
+        $foregroundHwnd = [Win32]::GetForegroundWindow()
+
         $callback = [Win32+EnumWindowsProc]{
             param($hWnd, $lParam)
 
@@ -177,20 +184,58 @@ if ($Mode -eq "screen") {
 
             # Both must match (AND logic)
             if ($titleMatch -and $processMatch) {
-                $script:foundHandle = $hWnd
-                $script:foundTitle = $title
-                if ($procName -ne "") {
-                    $script:foundProcessName = $procName
-                    $script:foundProcessId = $procId
-                }
-                return $false  # Stop enumerating
+                # Get dimensions for ranking
+                $rect = New-Object Win32+RECT
+                [Win32]::GetWindowRect($hWnd, [ref]$rect) | Out-Null
+                $w = $rect.Right - $rect.Left
+                $h = $rect.Bottom - $rect.Top
+
+                $script:candidates.Add(@{
+                    hWnd        = $hWnd
+                    title       = $title
+                    procName    = $procName
+                    procId      = $procId
+                    width       = $w
+                    height      = $h
+                    isForeground = ($hWnd -eq $script:foregroundHwnd)
+                })
             }
-            return $true
+            return $true  # Continue enumerating all windows
         }
 
         [Win32]::EnumWindows($callback, [IntPtr]::Zero) | Out-Null
 
-        if ($foundHandle -eq [IntPtr]::Zero) {
+        # Filter out zero-size and cloaked windows, then rank by foreground first, then largest area
+        $DWMWA_CLOAKED = 14
+        $best = $null
+        foreach ($c in $candidates) {
+            if ($c.width -le 0 -or $c.height -le 0) { continue }
+
+            $cloaked = 0
+            [Win32]::DwmGetWindowAttribute($c.hWnd, $DWMWA_CLOAKED, [ref]$cloaked, 4) | Out-Null
+            if ($cloaked -ne 0) { continue }
+
+            if ($null -eq $best) {
+                $best = $c
+                continue
+            }
+
+            # Prefer the foreground window
+            if ($c.isForeground -and -not $best.isForeground) {
+                $best = $c
+                continue
+            }
+            if ($best.isForeground -and -not $c.isForeground) {
+                continue
+            }
+
+            # Among equal foreground status, prefer larger area
+            if (($c.width * $c.height) -gt ($best.width * $best.height)) {
+                $best = $c
+            }
+        }
+
+        if ($null -eq $best) {
             if ($hasTitle -and $hasProcess) {
                 Write-JsonError "Window not found matching title '$WindowTitle' and process '$ProcessName'"
             } elseif ($hasTitle) {
@@ -199,6 +244,11 @@ if ($Mode -eq "screen") {
                 Write-JsonError "No window found for process: '$ProcessName'"
             }
         }
+
+        $foundHandle      = $best.hWnd
+        $foundTitle       = $best.title
+        $foundProcessName = $best.procName
+        $foundProcessId   = $best.procId
     }
 
     # Get process info if not already resolved (title-only match)
