@@ -139,3 +139,63 @@ export function writeClipboard(text: string, timeoutMs = 15000): Promise<void> {
 		child.stdin?.end();
 	});
 }
+
+/**
+ * Write a base64-encoded image to the Windows clipboard.
+ * The base64 is passed via stdin to avoid Windows command-line length limits
+ * and to eliminate any injection surface.
+ * Security: always call this AFTER redaction has been applied to the base64.
+ */
+export function writeImageToClipboard(base64: string, timeoutMs = 15000): Promise<void> {
+	return new Promise((resolve_, reject) => {
+		const winScriptPath = getScriptPath();
+		const args = [...buildBaseArgs(winScriptPath), "-Action", "write-image"];
+
+		const child = execFile(
+			"powershell.exe",
+			args,
+			{
+				maxBuffer: 1 * 1024 * 1024,
+				timeout: timeoutMs,
+				windowsHide: true,
+			},
+			(error, stdout, stderr) => {
+				if (error) {
+					if (error.killed) {
+						reject(new Error(`Clipboard image write timed out after ${timeoutMs}ms`));
+						return;
+					}
+					const message = formatPowerShellExecutionError(stderr, error.message);
+					reject(new Error(`Clipboard image write failed: ${message}`));
+					return;
+				}
+
+				const output = stdout.trim();
+				if (!output) {
+					reject(new Error("No output from clipboard script"));
+					return;
+				}
+
+				try {
+					const result = parseLastJsonLine(output) as {
+						error?: string;
+						success?: boolean;
+					};
+
+					if (result.error) {
+						reject(new Error(result.error));
+						return;
+					}
+
+					resolve_();
+				} catch (parseErr) {
+					reject(new Error(`Failed to parse clipboard image write output: ${parseErr}`));
+				}
+			},
+		);
+
+		// Pass base64 via stdin to avoid arg-length limits
+		child.stdin?.write(base64);
+		child.stdin?.end();
+	});
+}

@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { writeAuditEntry } from "./audit-log.js";
 import { captureWindow } from "./capture.js";
-import { readClipboard, writeClipboard } from "./clipboard.js";
+import { readClipboard, writeClipboard, writeImageToClipboard } from "./clipboard.js";
 import { type AEyesConfig, isWindowAllowed, loadConfig } from "./config.js";
 import { runCustomTool, validateCustomTool } from "./custom-tool.js";
 import { getEventLog } from "./event-log.js";
@@ -10,7 +10,7 @@ import { runHealthCheck } from "./health-check.js";
 import { listWindows } from "./list-windows.js";
 import { getProcesses } from "./processes.js";
 import { RateLimiter } from "./rate-limiter.js";
-import { applyRedactions, findMatchingRules } from "./redact.js";
+import { applyRedactions, findMatchingRedactionRules, findMatchingRules } from "./redact.js";
 import { resolveOutputPath, saveScreenshot } from "./save-screenshot.js";
 import { seeWindow } from "./see.js";
 import { detectExistingConfig, writeConfig } from "./setup.js";
@@ -113,6 +113,12 @@ export function createServer(): McpServer {
 				.describe(
 					"DPI scaling: 'native' (default, raw pixel resolution) or 'logical' (scaled to match visible UI size on HiDPI displays). Reduces payload size on high-DPI monitors.",
 				),
+			copy_to_clipboard: z
+				.boolean()
+				.optional()
+				.describe(
+					"If true, also copies the captured image to the Windows clipboard after redaction has been applied. The base64 image is still returned. Rejected when frontmost mode is used (window identity unknown before capture).",
+				),
 		},
 		async ({
 			window_title,
@@ -124,6 +130,7 @@ export function createServer(): McpServer {
 			quality,
 			mode: rawMode,
 			dpi_mode,
+			copy_to_clipboard,
 		}) => {
 			const startTime = Date.now();
 			const mode = rawMode ?? "window";
@@ -190,6 +197,38 @@ export function createServer(): McpServer {
 				};
 			}
 
+			// Security gate: reject copy_to_clipboard when redaction could apply.
+			// For frontmost mode we can't pre-check the window identity — also reject.
+			if (copy_to_clipboard) {
+				if (isFrontmost) {
+					const message =
+						"copy_to_clipboard rejected: cannot be used with frontmost mode (no window_title or process_name). The target window is unknown before capture, so redaction cannot be pre-checked — refusing to risk leaking unredacted pixels to the clipboard.";
+					writeAuditEntry({
+						timestamp: new Date(startTime).toISOString(),
+						tool: "capture",
+						params: { window_title, process_name, mode, copy_to_clipboard: true },
+						result: "blocked",
+						duration_ms: Date.now() - startTime,
+						error: message,
+					}).catch((err) => console.error("Audit log error:", err));
+					return { content: [{ type: "text", text: message }], isError: true };
+				}
+
+				const matchingRules = findMatchingRedactionRules(cfg, window_title, process_name);
+				if (matchingRules.length > 0) {
+					const message = `copy_to_clipboard rejected: window matches redaction rule(s) (${matchingRules.map((r) => r.match).join(", ")}). Redaction applies to the returned image but not to the clipboard copy — refusing to leak unredacted pixels.`;
+					writeAuditEntry({
+						timestamp: new Date(startTime).toISOString(),
+						tool: "capture",
+						params: { window_title, process_name, mode, copy_to_clipboard: true },
+						result: "blocked",
+						duration_ms: Date.now() - startTime,
+						error: message,
+					}).catch((err) => console.error("Audit log error:", err));
+					return { content: [{ type: "text", text: message }], isError: true };
+				}
+			}
+
 			try {
 				rateLimiter.record();
 				const result = await captureWindow(
@@ -233,6 +272,20 @@ export function createServer(): McpServer {
 					redactedCount = redactionResult.redactedCount;
 				}
 
+				// Write the (already-redacted) base64 to the clipboard AFTER redaction.
+				// This is the real security guarantee: clipboard always gets the redacted image.
+				// The pre-capture gate above (frontmost reject + redaction-rule reject) is
+				// defense-in-depth / fail-fast UX but not the primary security control.
+				let clipboardWarning: string | undefined;
+				if (copy_to_clipboard) {
+					try {
+						await writeImageToClipboard(result.base64);
+					} catch (err) {
+						const msg = err instanceof Error ? err.message : String(err);
+						clipboardWarning = `Failed to write clipboard: ${msg}`;
+					}
+				}
+
 				// Determine if/where to save
 				let savedPath: string | undefined;
 				let saveWarning: string | undefined;
@@ -257,11 +310,14 @@ export function createServer(): McpServer {
 				if (saveWarning) {
 					statusText += ` ${saveWarning}`;
 				}
+				if (clipboardWarning) {
+					statusText += ` ${clipboardWarning}`;
+				}
 
 				writeAuditEntry({
 					timestamp: new Date(startTime).toISOString(),
 					tool: "capture",
-					params: { window_title, process_name, mode, dpi_mode },
+					params: { window_title, process_name, mode, dpi_mode, copy_to_clipboard },
 					result: "success",
 					duration_ms: Date.now() - startTime,
 				}).catch((err) => console.error("Audit log error:", err));
@@ -283,7 +339,7 @@ export function createServer(): McpServer {
 				writeAuditEntry({
 					timestamp: new Date(startTime).toISOString(),
 					tool: "capture",
-					params: { window_title, process_name, mode, dpi_mode },
+					params: { window_title, process_name, mode, dpi_mode, copy_to_clipboard },
 					result: "error",
 					duration_ms: Date.now() - startTime,
 					error: message,

@@ -289,4 +289,27 @@ describe("capture module", () => {
 		const args = execFileMock.mock.calls[0][1] as string[];
 		expect(args).not.toContain("-DpiMode");
 	});
+
+	it("does not pass -CopyToClipboard (clipboard write moved to TS after redaction)", async () => {
+		execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+			callback(null, '{"image":"ZmFrZQ==","title":"Chrome"}', "");
+			return { stdin: { end: vi.fn() } };
+		});
+
+		const { captureWindow } = await import("../src/capture.js");
+		// captureWindow no longer accepts a copyToClipboard parameter
+		await captureWindow(
+			"Chrome",
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			"window",
+		);
+
+		const args = execFileMock.mock.calls[0][1] as string[];
+		expect(args).not.toContain("-CopyToClipboard");
+	});
 });
