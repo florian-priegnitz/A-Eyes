@@ -22,6 +22,7 @@ export function captureWindow(
 	format?: "png" | "jpeg",
 	quality?: number,
 	mode?: "window" | "screen",
+	dpiMode?: "native" | "logical",
 ): Promise<CaptureResult> {
 	return new Promise((resolve_, reject) => {
 		const scriptPath = resolve(__dirname, "..", "scripts", "screenshot.ps1");
@@ -66,6 +67,10 @@ export function captureWindow(
 
 		if (quality !== undefined) {
 			args.push("-Quality", String(quality));
+		}
+
+		if (dpiMode !== undefined) {
+			args.push("-DpiMode", dpiMode);
 		}
 
 		const child = execFile(

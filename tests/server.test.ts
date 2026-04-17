@@ -531,6 +531,7 @@ describe("createServer", () => {
 			undefined,
 			undefined,
 			"window",
+			undefined,
 		);
 	});
 
@@ -557,6 +558,7 @@ describe("createServer", () => {
 			undefined,
 			undefined,
 			"window",
+			undefined,
 		);
 	});
 
@@ -587,6 +589,7 @@ describe("createServer", () => {
 			undefined,
 			undefined,
 			"window",
+			undefined,
 		);
 	});
 
@@ -608,6 +611,7 @@ describe("createServer", () => {
 			undefined,
 			undefined,
 			"window",
+			undefined,
 		);
 	});
 
@@ -629,6 +633,7 @@ describe("createServer", () => {
 			undefined,
 			undefined,
 			"window",
+			undefined,
 		);
 	});
 
@@ -807,6 +812,7 @@ describe("createServer", () => {
 			undefined,
 			undefined,
 			"window",
+			undefined,
 		);
 		expect(isWindowAllowedMock).toHaveBeenCalledWith(expect.anything(), undefined, "chrome");
 	});
@@ -834,6 +840,7 @@ describe("createServer", () => {
 			undefined,
 			undefined,
 			"window",
+			undefined,
 		);
 	});
 
@@ -856,6 +863,7 @@ describe("createServer", () => {
 			undefined,
 			undefined,
 			"window",
+			undefined,
 		);
 		const imageContent = result.content.find((c) => c.type === "image");
 		expect(imageContent?.data).toBe("ZmFrZQ==");
@@ -880,6 +888,7 @@ describe("createServer", () => {
 			undefined,
 			undefined,
 			"window",
+			undefined,
 		);
 		const imageContent = result.content.find((c) => c.type === "image");
 		expect(imageContent?.data).toBe("ZmFrZQ==");
@@ -950,6 +959,7 @@ describe("createServer", () => {
 			"jpeg",
 			75,
 			"window",
+			undefined,
 		);
 		const imageContent = result.content.find((c) => c.type === "image");
 		expect(imageContent?.mimeType).toBe("image/jpeg");
@@ -991,9 +1001,120 @@ describe("createServer", () => {
 			"jpeg",
 			60,
 			"window",
+			undefined,
 		);
 		const imageContent = result.content.find((c) => c.type === "image");
 		expect(imageContent?.mimeType).toBe("image/jpeg");
+	});
+
+	it("rejects invalid dpi_mode value on capture tool via Zod schema", () => {
+		const server = createServer();
+		const tools = (
+			server as {
+				_registeredTools: Record<string, { inputSchema: { parse: (v: unknown) => unknown } }>;
+			}
+		)._registeredTools;
+		const schema = tools.capture.inputSchema;
+		expect(() => schema.parse({ window_title: "Chrome", dpi_mode: "2x" })).toThrow();
+	});
+
+	it("accepts native and logical as valid dpi_mode values on capture tool", async () => {
+		loadConfigMock.mockResolvedValue({});
+		isWindowAllowedMock.mockReturnValue(true);
+		captureWindowMock.mockResolvedValue({ base64: "ZmFrZQ==", windowTitle: "Chrome" });
+
+		const server = createServer();
+		const capture = getToolHandler(server, "capture");
+
+		for (const dpiModeValue of ["native", "logical"] as const) {
+			vi.clearAllMocks();
+			captureWindowMock.mockResolvedValue({ base64: "ZmFrZQ==", windowTitle: "Chrome" });
+			const result = await capture({ window_title: "Chrome", dpi_mode: dpiModeValue });
+			expect(result.isError).toBeUndefined();
+		}
+	});
+
+	it("passes dpi_mode to captureWindow in capture tool", async () => {
+		loadConfigMock.mockResolvedValue({});
+		isWindowAllowedMock.mockReturnValue(true);
+		captureWindowMock.mockResolvedValue({ base64: "ZmFrZQ==", windowTitle: "Chrome" });
+
+		const server = createServer();
+		const capture = getToolHandler(server, "capture");
+		await capture({ window_title: "Chrome", dpi_mode: "logical" });
+
+		expect(captureWindowMock).toHaveBeenCalledWith(
+			"Chrome",
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			"window",
+			"logical",
+		);
+	});
+
+	it("rejects invalid dpi_mode value on query tool via Zod schema", () => {
+		const server = createServer();
+		const tools = (
+			server as {
+				_registeredTools: Record<string, { inputSchema: { parse: (v: unknown) => unknown } }>;
+			}
+		)._registeredTools;
+		const schema = tools.query.inputSchema;
+		expect(() =>
+			schema.parse({ window_title: "Chrome", question: "What?", dpi_mode: "2x" }),
+		).toThrow();
+	});
+
+	it("passes dpi_mode to captureWindow in query tool", async () => {
+		loadConfigMock.mockResolvedValue({});
+		isWindowAllowedMock.mockReturnValue(true);
+		captureWindowMock.mockResolvedValue({ base64: "ZmFrZQ==", windowTitle: "Chrome" });
+
+		const server = createServer();
+		const query = getToolHandler(server, "query");
+		await query({ window_title: "Chrome", question: "What?", dpi_mode: "native" });
+
+		expect(captureWindowMock).toHaveBeenCalledWith(
+			"Chrome",
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			"window",
+			"native",
+		);
+	});
+
+	it("includes dpi_mode in capture audit log params", async () => {
+		loadConfigMock.mockResolvedValue({});
+		isWindowAllowedMock.mockReturnValue(true);
+		captureWindowMock.mockResolvedValue({ base64: "ZmFrZQ==", windowTitle: "Chrome" });
+
+		const server = createServer();
+		const capture = getToolHandler(server, "capture");
+		await capture({ window_title: "Chrome", dpi_mode: "logical" });
+
+		const entry = writeAuditEntryMock.mock.calls[0][0];
+		expect(entry.params.dpi_mode).toBe("logical");
+	});
+
+	it("includes dpi_mode in query audit log params", async () => {
+		loadConfigMock.mockResolvedValue({});
+		isWindowAllowedMock.mockReturnValue(true);
+		captureWindowMock.mockResolvedValue({ base64: "ZmFrZQ==", windowTitle: "Chrome" });
+
+		const server = createServer();
+		const query = getToolHandler(server, "query");
+		await query({ window_title: "Chrome", question: "What?", dpi_mode: "native" });
+
+		const entry = writeAuditEntryMock.mock.calls[0][0];
+		expect(entry.params.dpi_mode).toBe("native");
 	});
 
 	it("passes format to resolveOutputPath for save", async () => {
@@ -1033,6 +1154,7 @@ describe("createServer", () => {
 			undefined,
 			undefined,
 			"window",
+			undefined,
 		);
 	});
 
