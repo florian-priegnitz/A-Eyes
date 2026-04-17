@@ -661,10 +661,7 @@ export function createServer(): McpServer {
 				const truncated =
 					result.elementCount > 50 ? `\n  ... and ${result.elementCount - 50} more elements` : "";
 
-				let summaryText =
-					`Window: "${result.windowTitle}" [${result.processName}] — ${result.windowWidth}x${result.windowHeight}\n` +
-					`UI Elements (${result.elementCount} total):\n` +
-					(elementLines.length > 0 ? elementLines.join("\n") + truncated : "  (none found)");
+				let summaryText = `Window: "${result.windowTitle}" [${result.processName}] — ${result.windowWidth}x${result.windowHeight}\nUI Elements (${result.elementCount} total):\n${elementLines.length > 0 ? elementLines.join("\n") + truncated : "  (none found)"}`;
 
 				if (result.text) {
 					summaryText += `\n\nVisible text:\n  ${result.text}`;
