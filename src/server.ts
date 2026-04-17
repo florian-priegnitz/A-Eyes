@@ -14,6 +14,7 @@ import { applyRedactions, findMatchingRedactionRules, findMatchingRules } from "
 import { resolveOutputPath, saveScreenshot } from "./save-screenshot.js";
 import { seeWindow } from "./see.js";
 import { detectExistingConfig, writeConfig } from "./setup.js";
+import { watchWindow } from "./watch.js";
 
 export function createServer(): McpServer {
 	const server = new McpServer({
@@ -798,6 +799,211 @@ export function createServer(): McpServer {
 				}).catch((auditErr) => console.error("Audit log error:", auditErr));
 				return {
 					content: [{ type: "text", text: `Failed to inspect window: ${message}` }],
+					isError: true,
+				};
+			}
+		},
+	);
+
+	// --- watch tool ---
+	server.tool(
+		"watch",
+		"Poll a window until its visual content changes, then return the changed screenshot. Requires window_title or process_name — frontmost capture is not supported for watch mode. Screen mode uses '__screen__' allowlist sentinel.",
+		{
+			window_title: z
+				.string()
+				.optional()
+				.describe("Title of the window to watch. Either window_title or process_name is required."),
+			process_name: z
+				.string()
+				.optional()
+				.describe(
+					"Process name to watch (e.g. 'chrome'). More stable than window titles. Either window_title or process_name is required.",
+				),
+			mode: z
+				.enum(["window", "screen"])
+				.default("window")
+				.describe(
+					"Capture mode: 'window' (default) or 'screen'. Screen mode requires '__screen__' in the allowlist.",
+				),
+			poll_interval_ms: z
+				.number()
+				.int()
+				.min(100)
+				.max(60000)
+				.default(1000)
+				.describe("How often to poll for changes in milliseconds (100–60000, default 1000)."),
+			timeout_seconds: z
+				.number()
+				.int()
+				.min(1)
+				.max(300)
+				.default(30)
+				.describe(
+					"Maximum time to wait for a change in seconds (1–300, default 30). Returns last frame if no change detected.",
+				),
+		},
+		async ({ window_title, process_name, mode: rawMode, poll_interval_ms, timeout_seconds }) => {
+			const startTime = Date.now();
+			const mode = rawMode ?? "window";
+			const isScreen = mode === "screen";
+
+			// Frontmost not supported for watch — require explicit target
+			if (!isScreen && !window_title && !process_name) {
+				const message =
+					"watch requires window_title or process_name. Frontmost capture is not supported in watch mode.";
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "watch",
+					params: { mode },
+					result: "error",
+					duration_ms: Date.now() - startTime,
+					error: message,
+				}).catch((err) => console.error("Audit log error:", err));
+				return {
+					content: [{ type: "text", text: message }],
+					isError: true,
+				};
+			}
+
+			const cfg = await ensureConfig();
+
+			// Allowlist checks
+			if (isScreen && !isWindowAllowed(cfg, "__screen__", undefined)) {
+				const message =
+					!cfg.allowlist || cfg.allowlist.length === 0
+						? "No allowlist configured. Use the setup tool to create one, or add an allowlist manually to a-eyes.config.json."
+						: "Screen capture is not enabled. Add '__screen__' to the allowlist in a-eyes.config.json to allow it.";
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "watch",
+					params: { mode },
+					result: "blocked",
+					duration_ms: Date.now() - startTime,
+					error: message,
+				}).catch((err) => console.error("Audit log error:", err));
+				return {
+					content: [{ type: "text", text: message }],
+					isError: true,
+				};
+			}
+
+			if (!isScreen && !isWindowAllowed(cfg, window_title, process_name)) {
+				const message =
+					!cfg.allowlist || cfg.allowlist.length === 0
+						? "No allowlist configured. Use the setup tool to create one, or add an allowlist manually to a-eyes.config.json."
+						: `Window "${window_title ?? process_name}" is not in the allowlist. Allowed windows: ${cfg.allowlist.join(", ")}`;
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "watch",
+					params: { window_title, process_name },
+					result: "blocked",
+					duration_ms: Date.now() - startTime,
+					error: message,
+				}).catch((err) => console.error("Audit log error:", err));
+				return {
+					content: [{ type: "text", text: message }],
+					isError: true,
+				};
+			}
+
+			// Gate: check rate limit before starting. This first check counts as one slot.
+			if (!rateLimiter.isAllowed()) {
+				const retryAfter = rateLimiter.retryAfterSeconds();
+				const message = `Rate limit exceeded: maximum ${cfg.max_captures_per_minute} captures per minute. Try again in ${retryAfter} seconds.`;
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "watch",
+					params: { window_title, process_name, poll_interval_ms, timeout_seconds },
+					result: "rate_limited",
+					duration_ms: Date.now() - startTime,
+					error: message,
+				}).catch((err) => console.error("Audit log error:", err));
+				return {
+					content: [{ type: "text", text: message }],
+					isError: true,
+				};
+			}
+			rateLimiter.record();
+
+			// Per-poll rate limit hook — checked before each capture (polls 2..N)
+			const preCaptureHook = (): void => {
+				if (!rateLimiter.isAllowed()) {
+					throw new Error(
+						`Rate limit exhausted mid-watch: maximum ${cfg.max_captures_per_minute} captures per minute reached.`,
+					);
+				}
+				rateLimiter.record();
+			};
+
+			// Post-capture allowlist check — verifies the actual captured window is still allowed
+			const postCaptureCheck = (
+				capturedTitle: string,
+				capturedProcess: string | undefined,
+			): void => {
+				if (!isWindowAllowed(cfg, capturedTitle, capturedProcess)) {
+					throw new Error(
+						`Allowlist check failed mid-watch: window '${capturedTitle}' (process '${capturedProcess ?? "unknown"}') no longer in allowlist`,
+					);
+				}
+			};
+
+			try {
+				// TODO: Redaction is intentionally skipped for watch mode.
+				// Applying redaction after each poll would modify the image data before hashing,
+				// which would cause hash instability (if redaction is non-deterministic or
+				// the underlying content in the redacted region changes). Redaction should be
+				// applied to the final returned image only, once an ADR has been written for this.
+				const result = await watchWindow({
+					windowTitle: window_title,
+					processName: process_name,
+					mode,
+					pollIntervalMs: poll_interval_ms,
+					timeoutMs: timeout_seconds * 1000,
+					preCaptureHook,
+					postCaptureCheck,
+				});
+
+				const summaryText = result.changed
+					? `Content changed after ${(result.elapsedMs / 1000).toFixed(1)}s (${result.polls} poll${result.polls === 1 ? "" : "s"}).`
+					: `No change within ${timeout_seconds}s timeout (${result.polls} poll${result.polls === 1 ? "" : "s"}).`;
+
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "watch",
+					params: { window_title, process_name, mode, poll_interval_ms, timeout_seconds },
+					result: "success",
+					duration_ms: Date.now() - startTime,
+				}).catch((err) => console.error("Audit log error:", err));
+
+				return {
+					content: [
+						{
+							type: "image",
+							data: result.base64,
+							mimeType: "image/png",
+						},
+						{
+							type: "text",
+							text: summaryText,
+						},
+					],
+				};
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				const isRateLimited = message.startsWith("Rate limit exhausted mid-watch");
+				const isBlocked = message.startsWith("Allowlist check failed mid-watch");
+				const auditResult = isRateLimited ? "rate_limited" : isBlocked ? "blocked" : "error";
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "watch",
+					params: { window_title, process_name, mode, poll_interval_ms, timeout_seconds },
+					result: auditResult,
+					duration_ms: Date.now() - startTime,
+					error: message,
+				}).catch((auditErr) => console.error("Audit log error:", auditErr));
+				return {
+					content: [{ type: "text", text: `Watch failed: ${message}` }],
 					isError: true,
 				};
 			}
