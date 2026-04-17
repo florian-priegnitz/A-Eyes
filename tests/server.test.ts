@@ -1312,7 +1312,7 @@ describe("createServer", () => {
 			const result = await see({});
 
 			expect(result.isError).toBeUndefined();
-			expect(seeWindowMock).toHaveBeenCalledWith(undefined, undefined);
+			expect(seeWindowMock).toHaveBeenCalledWith(undefined, undefined, 30000, "full");
 		});
 
 		it("blocks frontmost see when returned window is not in allowlist", async () => {
@@ -1486,7 +1486,7 @@ describe("createServer", () => {
 			const see = getToolHandler(server, "see");
 			await see({ process_name: "chrome" });
 
-			expect(seeWindowMock).toHaveBeenCalledWith(undefined, "chrome");
+			expect(seeWindowMock).toHaveBeenCalledWith(undefined, "chrome", 30000, "full");
 		});
 
 		it("logs audit entry on success", async () => {
@@ -1541,6 +1541,171 @@ describe("createServer", () => {
 			expect(entry.tool).toBe("see");
 			expect(entry.result).toBe("error");
 			expect(entry.error).toBe("See failed");
+		});
+
+		// --- mode parameter tests ---
+
+		it("Zod rejects invalid mode value", async () => {
+			const server = createServer();
+			const see = getToolHandler(server, "see");
+			const result = await see({ window_title: "Notepad", mode: "xyz" });
+			expect(result.isError).toBe(true);
+		});
+
+		it("Zod accepts mode='full'", async () => {
+			loadConfigMock.mockResolvedValue({});
+			isWindowAllowedMock.mockReturnValue(true);
+			seeWindowMock.mockResolvedValue({
+				windowTitle: "Notepad",
+				processName: "notepad",
+				windowWidth: 800,
+				windowHeight: 600,
+				elementCount: 0,
+				elements: [],
+				text: "",
+				image: undefined,
+			});
+
+			const server = createServer();
+			const see = getToolHandler(server, "see");
+			const result = await see({ window_title: "Notepad", mode: "full" });
+
+			expect(result.isError).toBeUndefined();
+			expect(seeWindowMock).toHaveBeenCalledWith("Notepad", undefined, 30000, "full");
+		});
+
+		it("Zod accepts mode='text'", async () => {
+			loadConfigMock.mockResolvedValue({});
+			isWindowAllowedMock.mockReturnValue(true);
+			seeWindowMock.mockResolvedValue({
+				windowTitle: "Notepad",
+				processName: "notepad",
+				windowWidth: 800,
+				windowHeight: 600,
+				elementCount: 0,
+				elements: [],
+				text: "",
+				image: undefined,
+			});
+
+			const server = createServer();
+			const see = getToolHandler(server, "see");
+			const result = await see({ window_title: "Notepad", mode: "text" });
+
+			expect(result.isError).toBeUndefined();
+			expect(seeWindowMock).toHaveBeenCalledWith("Notepad", undefined, 30000, "text");
+		});
+
+		it("Zod default applies 'full' when mode omitted", async () => {
+			loadConfigMock.mockResolvedValue({});
+			isWindowAllowedMock.mockReturnValue(true);
+			seeWindowMock.mockResolvedValue({
+				windowTitle: "Notepad",
+				processName: "notepad",
+				windowWidth: 800,
+				windowHeight: 600,
+				elementCount: 0,
+				elements: [],
+				text: "",
+				image: undefined,
+			});
+
+			const server = createServer();
+			const see = getToolHandler(server, "see");
+			await see({ window_title: "Notepad" });
+
+			expect(seeWindowMock).toHaveBeenCalledWith("Notepad", undefined, 30000, "full");
+		});
+
+		it("audit log params include mode for see tool", async () => {
+			loadConfigMock.mockResolvedValue({});
+			isWindowAllowedMock.mockReturnValue(true);
+			seeWindowMock.mockResolvedValue({
+				windowTitle: "Notepad",
+				processName: "notepad",
+				windowWidth: 800,
+				windowHeight: 600,
+				elementCount: 0,
+				elements: [],
+				text: "",
+				image: undefined,
+			});
+
+			const server = createServer();
+			const see = getToolHandler(server, "see");
+			await see({ window_title: "Notepad", mode: "text" });
+
+			const entry = writeAuditEntryMock.mock.calls[0][0];
+			expect(entry.params.mode).toBe("text");
+		});
+
+		it("text mode output skips element-list block", async () => {
+			loadConfigMock.mockResolvedValue({});
+			isWindowAllowedMock.mockReturnValue(true);
+			seeWindowMock.mockResolvedValue({
+				windowTitle: "Notepad",
+				processName: "notepad",
+				windowWidth: 800,
+				windowHeight: 600,
+				elementCount: 3,
+				elements: [
+					{
+						id: "elem_0",
+						type: "Button",
+						name: "OK",
+						value: "",
+						enabled: true,
+						bounds: { x: 100, y: 200, width: 80, height: 30 },
+					},
+				],
+				text: "Hello World",
+				image: undefined,
+			});
+
+			const server = createServer();
+			const see = getToolHandler(server, "see");
+			const result = await see({ window_title: "Notepad", mode: "text" });
+
+			expect(result.isError).toBeUndefined();
+			const text = result.content.find((c) => c.type === "text")?.text ?? "";
+			expect(text).not.toContain("UI Elements");
+			expect(text).not.toContain("[Button]");
+			expect(text).not.toContain("elem_0");
+			expect(text).toContain("Hello World");
+		});
+
+		it("full mode output includes element-list block", async () => {
+			loadConfigMock.mockResolvedValue({});
+			isWindowAllowedMock.mockReturnValue(true);
+			seeWindowMock.mockResolvedValue({
+				windowTitle: "Notepad",
+				processName: "notepad",
+				windowWidth: 800,
+				windowHeight: 600,
+				elementCount: 1,
+				elements: [
+					{
+						id: "elem_0",
+						type: "Button",
+						name: "OK",
+						value: "",
+						enabled: true,
+						bounds: { x: 100, y: 200, width: 80, height: 30 },
+					},
+				],
+				text: "OK",
+				image: undefined,
+			});
+
+			const server = createServer();
+			const see = getToolHandler(server, "see");
+			const result = await see({ window_title: "Notepad", mode: "full" });
+
+			expect(result.isError).toBeUndefined();
+			const text = result.content.find((c) => c.type === "text")?.text ?? "";
+			expect(text).toContain("UI Elements");
+			expect(text).toContain("[Button]");
+			expect(text).toContain("elem_0");
 		});
 	});
 

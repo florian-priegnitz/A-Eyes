@@ -9,7 +9,11 @@ param(
     [int]$MaxElements = 150,
 
     [Parameter(Mandatory=$false)]
-    [int]$MaxDepth = 6
+    [int]$MaxDepth = 6,
+
+    [Parameter(Mandatory=$false)]
+    [ValidateSet("full", "text")]
+    [string]$Mode = "full"
 )
 
 $ErrorActionPreference = "Stop"
@@ -205,21 +209,23 @@ function Get-UIElements {
             } catch {}
 
             if (-not $isOffscreen) {
-                $bounds = $child.Current.BoundingRectangle
-                $elem = @{
-                    id      = $id
-                    type    = $controlType
-                    name    = $name
-                    value   = $value
-                    enabled = $isEnabled
-                    bounds  = @{
-                        x      = [int]$bounds.X
-                        y      = [int]$bounds.Y
-                        width  = [int]$bounds.Width
-                        height = [int]$bounds.Height
+                if ($script:collectElements) {
+                    $bounds = $child.Current.BoundingRectangle
+                    $elem = @{
+                        id      = $id
+                        type    = $controlType
+                        name    = $name
+                        value   = $value
+                        enabled = $isEnabled
+                        bounds  = @{
+                            x      = [int]$bounds.X
+                            y      = [int]$bounds.Y
+                            width  = [int]$bounds.Width
+                            height = [int]$bounds.Height
+                        }
                     }
+                    $script:elements.Add($elem)
                 }
-                $script:elements.Add($elem)
 
                 if (-not [string]::IsNullOrWhiteSpace($name)) { $script:allText.Add($name) }
                 if (-not [string]::IsNullOrWhiteSpace($value)) { $script:allText.Add($value) }
@@ -231,6 +237,8 @@ function Get-UIElements {
         }
     }
 }
+
+$script:collectElements = ($Mode -eq "full")
 
 try {
     $rootElement = [System.Windows.Automation.AutomationElement]::FromHandle($foundHandle)

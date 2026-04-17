@@ -599,8 +599,15 @@ export function createServer(): McpServer {
 				.describe(
 					"The process name to inspect (e.g. 'chrome', 'notepad'). More stable than window titles. Omit to inspect the foreground window.",
 				),
+			mode: z
+				.enum(["full", "text"])
+				.default("full")
+				.describe(
+					"Extraction mode: 'full' (default) returns screenshot + UI element tree + visible text; 'text' returns screenshot + visible text only, skipping the element list for a smaller payload. Both modes walk the element tree internally to harvest nested text.",
+				),
 		},
-		async ({ window_title, process_name }) => {
+		async ({ window_title, process_name, mode: rawMode }) => {
+			const mode = rawMode ?? "full";
 			const startTime = Date.now();
 			const isFrontmost = !window_title && !process_name;
 
@@ -616,7 +623,7 @@ export function createServer(): McpServer {
 				writeAuditEntry({
 					timestamp: new Date(startTime).toISOString(),
 					tool: "see",
-					params: { window_title, process_name },
+					params: { window_title, process_name, mode },
 					result: "blocked",
 					duration_ms: Date.now() - startTime,
 					error: message,
@@ -633,7 +640,7 @@ export function createServer(): McpServer {
 				writeAuditEntry({
 					timestamp: new Date(startTime).toISOString(),
 					tool: "see",
-					params: { window_title, process_name },
+					params: { window_title, process_name, mode },
 					result: "rate_limited",
 					duration_ms: Date.now() - startTime,
 					error: message,
@@ -646,7 +653,7 @@ export function createServer(): McpServer {
 
 			try {
 				rateLimiter.record();
-				const result = await seeWindow(window_title, process_name);
+				const result = await seeWindow(window_title, process_name, 30000, mode);
 
 				// For frontmost captures, check the allowlist against the actual window metadata.
 				if (isFrontmost && !isWindowAllowed(cfg, result.windowTitle, result.processName)) {
@@ -657,7 +664,7 @@ export function createServer(): McpServer {
 					writeAuditEntry({
 						timestamp: new Date(startTime).toISOString(),
 						tool: "see",
-						params: { window_title, process_name },
+						params: { window_title, process_name, mode },
 						result: "blocked",
 						duration_ms: Date.now() - startTime,
 						error: message,
@@ -668,19 +675,24 @@ export function createServer(): McpServer {
 					};
 				}
 
-				// Format element list as readable text
-				const elementLines = result.elements.slice(0, 50).map((el) => {
-					const parts = [`[${el.type}]`, `"${el.name}"`];
-					if (el.value) parts.push(`value="${el.value}"`);
-					if (!el.enabled) parts.push("(disabled)");
-					parts.push(`at (${el.bounds.x},${el.bounds.y} ${el.bounds.width}x${el.bounds.height})`);
-					return `  ${el.id}: ${parts.join(" ")}`;
-				});
+				// Format output based on mode
+				let summaryText = `Window: "${result.windowTitle}" [${result.processName}] — ${result.windowWidth}x${result.windowHeight}\n`;
 
-				const truncated =
-					result.elementCount > 50 ? `\n  ... and ${result.elementCount - 50} more elements` : "";
+				if (mode !== "text") {
+					// Format element list as readable text
+					const elementLines = result.elements.slice(0, 50).map((el) => {
+						const parts = [`[${el.type}]`, `"${el.name}"`];
+						if (el.value) parts.push(`value="${el.value}"`);
+						if (!el.enabled) parts.push("(disabled)");
+						parts.push(`at (${el.bounds.x},${el.bounds.y} ${el.bounds.width}x${el.bounds.height})`);
+						return `  ${el.id}: ${parts.join(" ")}`;
+					});
 
-				let summaryText = `Window: "${result.windowTitle}" [${result.processName}] — ${result.windowWidth}x${result.windowHeight}\nUI Elements (${result.elementCount} total):\n${elementLines.length > 0 ? elementLines.join("\n") + truncated : "  (none found)"}`;
+					const truncated =
+						result.elementCount > 50 ? `\n  ... and ${result.elementCount - 50} more elements` : "";
+
+					summaryText += `UI Elements (${result.elementCount} total):\n${elementLines.length > 0 ? elementLines.join("\n") + truncated : "  (none found)"}`;
+				}
 
 				if (result.text) {
 					summaryText += `\n\nVisible text:\n  ${result.text}`;
@@ -689,7 +701,7 @@ export function createServer(): McpServer {
 				writeAuditEntry({
 					timestamp: new Date(startTime).toISOString(),
 					tool: "see",
-					params: { window_title, process_name },
+					params: { window_title, process_name, mode },
 					result: "success",
 					duration_ms: Date.now() - startTime,
 				}).catch((err) => console.error("Audit log error:", err));
@@ -723,7 +735,7 @@ export function createServer(): McpServer {
 				writeAuditEntry({
 					timestamp: new Date(startTime).toISOString(),
 					tool: "see",
-					params: { window_title, process_name },
+					params: { window_title, process_name, mode },
 					result: "error",
 					duration_ms: Date.now() - startTime,
 					error: message,
