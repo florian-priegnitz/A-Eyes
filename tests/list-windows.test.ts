@@ -15,7 +15,7 @@ describe("list-windows module", () => {
 		execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
 			callback(
 				null,
-				'{"windows":[{"title":"Chrome","processName":"chrome","processId":1,"width":1200,"height":800,"minimized":false}],"count":1}',
+				'{"windows":[{"title":"Chrome","processName":"chrome","processId":1,"width":1200,"height":800,"minimized":false,"isActive":false,"windowCount":1}],"count":1}',
 				"",
 			);
 		});
@@ -72,7 +72,7 @@ describe("list-windows module", () => {
 		execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
 			callback(
 				null,
-				'INFO: preparing list\n{"windows":[{"title":"Chrome","processName":"chrome","processId":1,"width":1200,"height":800,"minimized":false}],"count":1}\n',
+				'INFO: preparing list\n{"windows":[{"title":"Chrome","processName":"chrome","processId":1,"width":1200,"height":800,"minimized":false,"isActive":false,"windowCount":1}],"count":1}\n',
 				"",
 			);
 		});
@@ -81,5 +81,180 @@ describe("list-windows module", () => {
 		const result = await listWindows();
 		expect(result.count).toBe(1);
 		expect(result.windows[0]?.processName).toBe("chrome");
+	});
+
+	// --- isActive / windowCount tests ---
+
+	it("passes through isActive: true from PS output", async () => {
+		execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+			callback(
+				null,
+				JSON.stringify({
+					windows: [
+						{
+							title: "VS Code",
+							processName: "code",
+							processId: 42,
+							width: 1920,
+							height: 1080,
+							minimized: false,
+							isActive: true,
+							windowCount: 1,
+						},
+					],
+					count: 1,
+				}),
+				"",
+			);
+		});
+
+		const { listWindows } = await import("../src/list-windows.js");
+		const result = await listWindows();
+
+		expect(result.windows[0]?.isActive).toBe(true);
+	});
+
+	it("passes through isActive: false from PS output", async () => {
+		execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+			callback(
+				null,
+				JSON.stringify({
+					windows: [
+						{
+							title: "Notepad",
+							processName: "notepad",
+							processId: 99,
+							width: 800,
+							height: 600,
+							minimized: false,
+							isActive: false,
+							windowCount: 1,
+						},
+					],
+					count: 1,
+				}),
+				"",
+			);
+		});
+
+		const { listWindows } = await import("../src/list-windows.js");
+		const result = await listWindows();
+
+		expect(result.windows[0]?.isActive).toBe(false);
+	});
+
+	it("passes through windowCount for a process with multiple windows", async () => {
+		execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+			callback(
+				null,
+				JSON.stringify({
+					windows: [
+						{
+							title: "Chrome - Tab 1",
+							processName: "chrome",
+							processId: 10,
+							width: 1200,
+							height: 800,
+							minimized: false,
+							isActive: true,
+							windowCount: 3,
+						},
+						{
+							title: "Chrome - Tab 2",
+							processName: "chrome",
+							processId: 10,
+							width: 1200,
+							height: 800,
+							minimized: false,
+							isActive: false,
+							windowCount: 3,
+						},
+						{
+							title: "Chrome - Tab 3",
+							processName: "chrome",
+							processId: 10,
+							width: 1200,
+							height: 800,
+							minimized: true,
+							isActive: false,
+							windowCount: 3,
+						},
+					],
+					count: 3,
+				}),
+				"",
+			);
+		});
+
+		const { listWindows } = await import("../src/list-windows.js");
+		const result = await listWindows();
+
+		expect(result.count).toBe(3);
+		for (const w of result.windows) {
+			expect(w.windowCount).toBe(3);
+		}
+	});
+
+	it("correctly identifies single active window among multiple processes", async () => {
+		execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+			callback(
+				null,
+				JSON.stringify({
+					windows: [
+						{
+							title: "VS Code",
+							processName: "code",
+							processId: 1,
+							width: 1920,
+							height: 1080,
+							minimized: false,
+							isActive: true,
+							windowCount: 1,
+						},
+						{
+							title: "Firefox",
+							processName: "firefox",
+							processId: 2,
+							width: 1280,
+							height: 720,
+							minimized: false,
+							isActive: false,
+							windowCount: 1,
+						},
+						{
+							title: "Terminal",
+							processName: "wt",
+							processId: 3,
+							width: 900,
+							height: 500,
+							minimized: false,
+							isActive: false,
+							windowCount: 2,
+						},
+					],
+					count: 3,
+				}),
+				"",
+			);
+		});
+
+		const { listWindows } = await import("../src/list-windows.js");
+		const result = await listWindows();
+
+		const activeWindows = result.windows.filter((w) => w.isActive);
+		expect(activeWindows).toHaveLength(1);
+		expect(activeWindows[0]?.title).toBe("VS Code");
+	});
+
+	it("returns count: 0 and empty windows array for empty result", async () => {
+		execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+			callback(null, JSON.stringify({ windows: [], count: 0 }), "");
+		});
+
+		const { listWindows } = await import("../src/list-windows.js");
+		const result = await listWindows();
+
+		expect(result.count).toBe(0);
+		expect(result.windows).toHaveLength(0);
 	});
 });

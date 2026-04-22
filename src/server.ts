@@ -302,7 +302,10 @@ export function createServer(): McpServer {
 
 			const windows = result.windows.map((w) => {
 				const allowed = isWindowAllowed(cfg, w.title);
-				return `${allowed ? "+" : "-"} ${w.title} [${w.processName}] (${w.width}x${w.height}${w.minimized ? ", minimized" : ""})`;
+				const allowedMarker = allowed ? "+" : "-";
+				const activeMarker = w.isActive ? "*" : " ";
+				const windowCountSuffix = w.windowCount > 1 ? ` (${w.windowCount} windows)` : "";
+				return `${allowedMarker}${activeMarker} ${w.title} [${w.processName}] (${w.width}x${w.height}${w.minimized ? ", minimized" : ""})${windowCountSuffix}`;
 			});
 
 			writeAuditEntry({
@@ -317,7 +320,7 @@ export function createServer(): McpServer {
 				content: [
 					{
 						type: "text",
-						text: `Found ${result.count} windows:\n\n${windows.join("\n")}\n\n(+ = capturable, - = blocked by allowlist)`,
+						text: `Found ${result.count} windows:\n\n${windows.join("\n")}\n\n(+ = capturable, - = blocked by allowlist, * = active window, +* = active and capturable)`,
 					},
 				],
 			};

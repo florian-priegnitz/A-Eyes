@@ -394,6 +394,8 @@ describe("createServer", () => {
 					width: 1200,
 					height: 800,
 					minimized: false,
+					isActive: false,
+					windowCount: 1,
 				},
 				{
 					title: "Mozilla Firefox",
@@ -402,6 +404,8 @@ describe("createServer", () => {
 					width: 1100,
 					height: 780,
 					minimized: false,
+					isActive: false,
+					windowCount: 1,
 				},
 			],
 			count: 2,
@@ -413,8 +417,100 @@ describe("createServer", () => {
 		const text = result.content[0]?.text ?? "";
 
 		expect(text).toContain("Found 2 windows:");
-		expect(text).toContain("+ Google Chrome - New Tab");
-		expect(text).toContain("- Mozilla Firefox");
+		// Format is: [allow][active] title — space for inactive window
+		expect(text).toContain("+  Google Chrome - New Tab");
+		expect(text).toContain("-  Mozilla Firefox");
+	});
+
+	it("marks active window with * in list_windows output", async () => {
+		loadConfigMock.mockResolvedValue({});
+		isWindowAllowedMock.mockReturnValue(true);
+		listWindowsMock.mockResolvedValue({
+			windows: [
+				{
+					title: "VS Code",
+					processName: "code",
+					processId: 1,
+					width: 1920,
+					height: 1080,
+					minimized: false,
+					isActive: true,
+					windowCount: 1,
+				},
+				{
+					title: "Terminal",
+					processName: "wt",
+					processId: 2,
+					width: 900,
+					height: 500,
+					minimized: false,
+					isActive: false,
+					windowCount: 1,
+				},
+			],
+			count: 2,
+		});
+
+		const server = createServer();
+		const list = getToolHandler(server, "list_windows");
+		const result = await list({});
+		const text = result.content[0]?.text ?? "";
+
+		// Active window line contains the * marker between allow marker and title
+		expect(text).toMatch(/\+\* VS Code/);
+		// Inactive window has space instead of *
+		expect(text).toMatch(/\+ {2}Terminal/);
+	});
+
+	it("appends (N windows) suffix when windowCount > 1", async () => {
+		loadConfigMock.mockResolvedValue({});
+		isWindowAllowedMock.mockReturnValue(true);
+		listWindowsMock.mockResolvedValue({
+			windows: [
+				{
+					title: "Chrome - Tab A",
+					processName: "chrome",
+					processId: 10,
+					width: 1200,
+					height: 800,
+					minimized: false,
+					isActive: false,
+					windowCount: 3,
+				},
+				{
+					title: "Notepad",
+					processName: "notepad",
+					processId: 20,
+					width: 800,
+					height: 600,
+					minimized: false,
+					isActive: false,
+					windowCount: 1,
+				},
+			],
+			count: 2,
+		});
+
+		const server = createServer();
+		const list = getToolHandler(server, "list_windows");
+		const result = await list({});
+		const text = result.content[0]?.text ?? "";
+
+		expect(text).toContain("(3 windows)");
+		expect(text).not.toMatch(/Notepad.*\(\d+ windows\)/);
+	});
+
+	it("legend line mentions active window marker", async () => {
+		loadConfigMock.mockResolvedValue({});
+		isWindowAllowedMock.mockReturnValue(true);
+		listWindowsMock.mockResolvedValue({ windows: [], count: 0 });
+
+		const server = createServer();
+		const list = getToolHandler(server, "list_windows");
+		const result = await list({});
+		const text = result.content[0]?.text ?? "";
+
+		expect(text).toContain("* = active window");
 	});
 
 	it("passes max_width to captureWindow", async () => {
