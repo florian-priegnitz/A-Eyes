@@ -63,4 +63,42 @@ describe("RateLimiter", () => {
 		const limiter = new RateLimiter(1);
 		expect(limiter.retryAfterSeconds()).toBe(0);
 	});
+
+	describe("tryReserve", () => {
+		it("succeeds and records N timestamps when slots are available", () => {
+			const limiter = new RateLimiter(10);
+			expect(limiter.tryReserve(3)).toBe(true);
+			// After reserving 3, only 7 remain — reserving 7 more should succeed
+			expect(limiter.tryReserve(7)).toBe(true);
+			// Now at limit — isAllowed returns false
+			expect(limiter.isAllowed()).toBe(false);
+		});
+
+		it("fails and records nothing when N would exceed the limit", () => {
+			const limiter = new RateLimiter(5);
+			limiter.record();
+			limiter.record(); // 2 used, 3 remaining
+			// Trying to reserve 4 should fail
+			expect(limiter.tryReserve(4)).toBe(false);
+			// No additional timestamps recorded — still only 2 used
+			expect(limiter.isAllowed()).toBe(true);
+			limiter.record(); // 3 used — still allowed (limit 5)
+			expect(limiter.isAllowed()).toBe(true);
+		});
+
+		it("always succeeds when maxPerMinute is 0 (unlimited)", () => {
+			const limiter = new RateLimiter(0);
+			expect(limiter.tryReserve(1000)).toBe(true);
+			// Still allowed since unlimited
+			expect(limiter.isAllowed()).toBe(true);
+		});
+
+		it("exactly at limit — reserving 1 fails", () => {
+			const limiter = new RateLimiter(3);
+			limiter.record();
+			limiter.record();
+			limiter.record();
+			expect(limiter.tryReserve(1)).toBe(false);
+		});
+	});
 });

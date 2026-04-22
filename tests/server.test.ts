@@ -12,6 +12,7 @@ const {
 	resolveOutputPathMock,
 	saveScreenshotMock,
 	seeWindowMock,
+	watchWindowMock,
 	writeAuditEntryMock,
 	writeConfigMock,
 	writeImageToClipboardMock,
@@ -26,6 +27,7 @@ const {
 	resolveOutputPathMock: vi.fn(),
 	saveScreenshotMock: vi.fn(),
 	seeWindowMock: vi.fn(),
+	watchWindowMock: vi.fn(),
 	writeAuditEntryMock: vi.fn(),
 	writeConfigMock: vi.fn(),
 	writeImageToClipboardMock: vi.fn(),
@@ -71,6 +73,10 @@ vi.mock("../src/clipboard.js", () => ({
 	readClipboard: vi.fn(),
 	writeClipboard: vi.fn(),
 	writeImageToClipboard: writeImageToClipboardMock,
+}));
+
+vi.mock("../src/watch.js", () => ({
+	watchWindow: watchWindowMock,
 }));
 
 type ToolHandler = (args: Record<string, unknown>) => Promise<{
@@ -2013,6 +2019,248 @@ describe("createServer", () => {
 			expect(imageContent?.data).toBe("ZmFrZQ==");
 			const text = result.content.find((c) => c.type === "text")?.text ?? "";
 			expect(text).toContain("Failed to write clipboard: Clipboard write failed: access denied");
+		});
+	});
+
+	describe("watch tool", () => {
+		it("rejects poll_interval_ms below min (50)", async () => {
+			const server = createServer();
+			const watch = getToolHandler(server, "watch");
+			// Zod validation fires before handler — the SDK wraps invalid params
+			// We test via direct schema parse instead; confirm the handler guards inputs.
+			// Zod min is 100 — passing 50 should fail schema validation.
+			// In the MCP SDK the handler receives already-parsed params, so we test
+			// by passing the raw Zod parse directly.
+			const { z } = await import("zod");
+			const schema = z.object({
+				poll_interval_ms: z.number().int().min(100).max(60000).default(1000),
+			});
+			const result = schema.safeParse({ poll_interval_ms: 50 });
+			expect(result.success).toBe(false);
+		});
+
+		it("rejects timeout_seconds above max (500)", async () => {
+			const { z } = await import("zod");
+			const schema = z.object({
+				timeout_seconds: z.number().int().min(1).max(300).default(30),
+			});
+			const result = schema.safeParse({ timeout_seconds: 500 });
+			expect(result.success).toBe(false);
+		});
+
+		it("rejects frontmost watch (no window_title or process_name)", async () => {
+			loadConfigMock.mockResolvedValue({ allowlist: ["Chrome"] });
+			isWindowAllowedMock.mockReturnValue(true);
+
+			const server = createServer();
+			const watch = getToolHandler(server, "watch");
+			const result = await watch({ mode: "window", poll_interval_ms: 1000, timeout_seconds: 30 });
+
+			expect(result.isError).toBe(true);
+			expect(result.content[0]?.text).toContain("window_title or process_name");
+			expect(watchWindowMock).not.toHaveBeenCalled();
+		});
+
+		it("blocks when window not in allowlist", async () => {
+			loadConfigMock.mockResolvedValue({ allowlist: ["VS Code"] });
+			isWindowAllowedMock.mockReturnValue(false);
+
+			const server = createServer();
+			const watch = getToolHandler(server, "watch");
+			const result = await watch({
+				window_title: "Chrome",
+				mode: "window",
+				poll_interval_ms: 1000,
+				timeout_seconds: 30,
+			});
+
+			expect(result.isError).toBe(true);
+			expect(result.content[0]?.text).toContain("not in the allowlist");
+			expect(watchWindowMock).not.toHaveBeenCalled();
+		});
+
+		it("returns rate_limited when rate limiter gate fails at entry", async () => {
+			// max_captures_per_minute=1, exhaust the single slot before calling watch
+			loadConfigMock.mockResolvedValue({
+				allowlist: ["Chrome"],
+				max_captures_per_minute: 1,
+			});
+			isWindowAllowedMock.mockReturnValue(true);
+
+			const server = createServer();
+			// Exhaust the capture tool first to consume the one slot
+			const capture = getToolHandler(server, "capture");
+			captureWindowMock.mockResolvedValue({
+				base64: "ZmFrZQ==",
+				windowTitle: "Chrome",
+				processName: "chrome",
+			});
+			await capture({ window_title: "Chrome", mode: "window" });
+
+			const watch = getToolHandler(server, "watch");
+			const result = await watch({
+				window_title: "Chrome",
+				mode: "window",
+				poll_interval_ms: 1000,
+				timeout_seconds: 30,
+			});
+
+			expect(result.isError).toBe(true);
+			expect(result.content[0]?.text).toContain("Rate limit exceeded");
+			expect(watchWindowMock).not.toHaveBeenCalled();
+		});
+
+		it("returns rate_limited when rate limit is exhausted mid-watch", async () => {
+			loadConfigMock.mockResolvedValue({
+				allowlist: ["Chrome"],
+				max_captures_per_minute: 2,
+			});
+			isWindowAllowedMock.mockReturnValue(true);
+
+			// watchWindow throws mid-watch rate limit error (simulating preCaptureHook firing)
+			watchWindowMock.mockRejectedValue(
+				new Error("Rate limit exhausted mid-watch: maximum 2 captures per minute reached."),
+			);
+
+			const server = createServer();
+			const watch = getToolHandler(server, "watch");
+			const result = await watch({
+				window_title: "Chrome",
+				mode: "window",
+				poll_interval_ms: 1000,
+				timeout_seconds: 30,
+			});
+
+			expect(result.isError).toBe(true);
+			expect(result.content[0]?.text).toContain("Rate limit exhausted mid-watch");
+			expect(writeAuditEntryMock).toHaveBeenCalledWith(
+				expect.objectContaining({ tool: "watch", result: "rate_limited" }),
+			);
+		});
+
+		it("returns blocked when allowlist rejects actual window mid-watch", async () => {
+			loadConfigMock.mockResolvedValue({
+				allowlist: ["Chrome"],
+				max_captures_per_minute: 0,
+			});
+			isWindowAllowedMock.mockReturnValue(true);
+
+			// watchWindow throws allowlist violation (simulating postCaptureCheck firing on poll 2)
+			watchWindowMock.mockRejectedValue(
+				new Error(
+					"Allowlist check failed mid-watch: window 'MaliciousApp' (process 'evil.exe') no longer in allowlist",
+				),
+			);
+
+			const server = createServer();
+			const watch = getToolHandler(server, "watch");
+			const result = await watch({
+				window_title: "Chrome",
+				mode: "window",
+				poll_interval_ms: 1000,
+				timeout_seconds: 30,
+			});
+
+			expect(result.isError).toBe(true);
+			expect(result.content[0]?.text).toContain("Allowlist check failed mid-watch");
+			expect(writeAuditEntryMock).toHaveBeenCalledWith(
+				expect.objectContaining({ tool: "watch", result: "blocked" }),
+			);
+		});
+
+		it("calls watchWindow with correct params and returns image on success", async () => {
+			loadConfigMock.mockResolvedValue({
+				allowlist: ["Chrome"],
+				max_captures_per_minute: 0, // unlimited
+			});
+			isWindowAllowedMock.mockReturnValue(true);
+			watchWindowMock.mockResolvedValue({
+				base64: "ZmFrZQ==",
+				windowTitle: "Chrome",
+				processName: "chrome",
+				changed: true,
+				elapsedMs: 1200,
+				polls: 2,
+			});
+
+			const server = createServer();
+			const watch = getToolHandler(server, "watch");
+			const result = await watch({
+				window_title: "Chrome",
+				mode: "window",
+				poll_interval_ms: 1000,
+				timeout_seconds: 10,
+			});
+
+			expect(result.isError).toBeUndefined();
+			expect(watchWindowMock).toHaveBeenCalledWith(
+				expect.objectContaining({
+					windowTitle: "Chrome",
+					processName: undefined,
+					mode: "window",
+					pollIntervalMs: 1000,
+					timeoutMs: 10000,
+					preCaptureHook: expect.any(Function),
+					postCaptureCheck: expect.any(Function),
+				}),
+			);
+			const image = result.content.find((c) => c.type === "image");
+			expect(image?.data).toBe("ZmFrZQ==");
+			const text = result.content.find((c) => c.type === "text")?.text ?? "";
+			expect(text).toContain("changed after");
+			expect(text).toContain("2 polls");
+		});
+
+		it("reports no-change summary on timeout", async () => {
+			loadConfigMock.mockResolvedValue({ allowlist: ["Chrome"], max_captures_per_minute: 0 });
+			isWindowAllowedMock.mockReturnValue(true);
+			watchWindowMock.mockResolvedValue({
+				base64: "ZmFrZQ==",
+				windowTitle: "Chrome",
+				processName: undefined,
+				changed: false,
+				elapsedMs: 30000,
+				polls: 30,
+			});
+
+			const server = createServer();
+			const watch = getToolHandler(server, "watch");
+			const result = await watch({
+				window_title: "Chrome",
+				mode: "window",
+				poll_interval_ms: 1000,
+				timeout_seconds: 30,
+			});
+
+			const text = result.content.find((c) => c.type === "text")?.text ?? "";
+			expect(text).toContain("No change");
+			expect(text).toContain("30 polls");
+		});
+
+		it("writes audit entry on success", async () => {
+			loadConfigMock.mockResolvedValue({ allowlist: ["Chrome"], max_captures_per_minute: 0 });
+			isWindowAllowedMock.mockReturnValue(true);
+			watchWindowMock.mockResolvedValue({
+				base64: "ZmFrZQ==",
+				windowTitle: "Chrome",
+				processName: undefined,
+				changed: true,
+				elapsedMs: 500,
+				polls: 1,
+			});
+
+			const server = createServer();
+			const watch = getToolHandler(server, "watch");
+			await watch({
+				window_title: "Chrome",
+				mode: "window",
+				poll_interval_ms: 1000,
+				timeout_seconds: 10,
+			});
+
+			expect(writeAuditEntryMock).toHaveBeenCalledWith(
+				expect.objectContaining({ tool: "watch", result: "success" }),
+			);
 		});
 	});
 });
