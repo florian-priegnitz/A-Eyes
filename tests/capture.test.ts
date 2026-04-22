@@ -251,4 +251,42 @@ describe("capture module", () => {
 		expect(args[processIndex + 1]).toBe("chrome");
 		expect(result.windowTitle).toBe("Google Chrome");
 	});
+
+	it("passes dpiMode as -DpiMode PowerShell argument when set to logical", async () => {
+		execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+			callback(null, '{"image":"ZmFrZQ==","title":"Chrome"}', "");
+			return { stdin: { end: vi.fn() } };
+		});
+
+		const { captureWindow } = await import("../src/capture.js");
+		await captureWindow(
+			"Chrome",
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			"logical",
+		);
+
+		const args = execFileMock.mock.calls[0][1] as string[];
+		const dpiModeIndex = args.indexOf("-DpiMode");
+		expect(dpiModeIndex).toBeGreaterThan(-1);
+		expect(args[dpiModeIndex + 1]).toBe("logical");
+	});
+
+	it("does not pass -DpiMode when dpiMode is undefined", async () => {
+		execFileMock.mockImplementation((_cmd, _args, _opts, callback) => {
+			callback(null, '{"image":"ZmFrZQ==","title":"Chrome"}', "");
+			return { stdin: { end: vi.fn() } };
+		});
+
+		const { captureWindow } = await import("../src/capture.js");
+		await captureWindow("Chrome");
+
+		const args = execFileMock.mock.calls[0][1] as string[];
+		expect(args).not.toContain("-DpiMode");
+	});
 });

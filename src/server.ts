@@ -107,6 +107,12 @@ export function createServer(): McpServer {
 				.describe(
 					"Capture mode: 'window' (default) captures a specific window, 'screen' captures the full primary monitor. In screen mode, window_title and process_name are ignored. Screen capture requires '__screen__' in the allowlist.",
 				),
+			dpi_mode: z
+				.enum(["native", "logical"])
+				.optional()
+				.describe(
+					"DPI scaling: 'native' (default, raw pixel resolution) or 'logical' (scaled to match visible UI size on HiDPI displays). Reduces payload size on high-DPI monitors.",
+				),
 		},
 		async ({
 			window_title,
@@ -117,6 +123,7 @@ export function createServer(): McpServer {
 			format,
 			quality,
 			mode: rawMode,
+			dpi_mode,
 		}) => {
 			const startTime = Date.now();
 			const mode = rawMode ?? "window";
@@ -194,6 +201,7 @@ export function createServer(): McpServer {
 					format,
 					quality,
 					mode,
+					dpi_mode,
 				);
 
 				// For frontmost captures, check the allowlist against the actual window metadata.
@@ -253,7 +261,7 @@ export function createServer(): McpServer {
 				writeAuditEntry({
 					timestamp: new Date(startTime).toISOString(),
 					tool: "capture",
-					params: { window_title, process_name, mode },
+					params: { window_title, process_name, mode, dpi_mode },
 					result: "success",
 					duration_ms: Date.now() - startTime,
 				}).catch((err) => console.error("Audit log error:", err));
@@ -275,7 +283,7 @@ export function createServer(): McpServer {
 				writeAuditEntry({
 					timestamp: new Date(startTime).toISOString(),
 					tool: "capture",
-					params: { window_title, process_name },
+					params: { window_title, process_name, mode, dpi_mode },
 					result: "error",
 					duration_ms: Date.now() - startTime,
 					error: message,
@@ -400,6 +408,12 @@ export function createServer(): McpServer {
 				.describe(
 					"Capture mode: 'window' (default) captures a specific window, 'screen' captures the full primary monitor. In screen mode, window_title and process_name are ignored. Screen capture requires '__screen__' in the allowlist.",
 				),
+			dpi_mode: z
+				.enum(["native", "logical"])
+				.optional()
+				.describe(
+					"DPI scaling: 'native' (default, raw pixel resolution) or 'logical' (scaled to match visible UI size on HiDPI displays). Reduces payload size on high-DPI monitors.",
+				),
 		},
 		async ({
 			window_title,
@@ -410,6 +424,7 @@ export function createServer(): McpServer {
 			format,
 			quality,
 			mode: rawMode,
+			dpi_mode,
 		}) => {
 			const startTime = Date.now();
 			const mode = rawMode ?? "window";
@@ -487,6 +502,7 @@ export function createServer(): McpServer {
 					format,
 					quality,
 					mode,
+					dpi_mode,
 				);
 
 				// For frontmost captures, check the allowlist against the actual window metadata.
@@ -526,7 +542,7 @@ export function createServer(): McpServer {
 				writeAuditEntry({
 					timestamp: new Date(startTime).toISOString(),
 					tool: "query",
-					params: { window_title, process_name, question, mode },
+					params: { window_title, process_name, question, mode, dpi_mode },
 					result: "success",
 					duration_ms: Date.now() - startTime,
 				}).catch((err) => console.error("Audit log error:", err));
@@ -548,7 +564,7 @@ export function createServer(): McpServer {
 				writeAuditEntry({
 					timestamp: new Date(startTime).toISOString(),
 					tool: "query",
-					params: { window_title, process_name, question },
+					params: { window_title, process_name, question, mode, dpi_mode },
 					result: "error",
 					duration_ms: Date.now() - startTime,
 					error: message,

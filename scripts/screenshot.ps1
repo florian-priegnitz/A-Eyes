@@ -27,7 +27,11 @@ param(
     [int]$Quality = 85,
 
     [Parameter(Mandatory=$false)]
-    [string]$Mode = "window"
+    [string]$Mode = "window",
+
+    [Parameter(Mandatory=$false)]
+    [ValidateSet("native", "logical")]
+    [string]$DpiMode = "native"
 )
 
 # Ensure errors produce clean JSON output
@@ -86,6 +90,20 @@ public class Win32 {
     [DllImport("dwmapi.dll")]
     public static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out int pvAttribute, int cbAttribute);
 
+    // DPI helpers
+    [DllImport("user32.dll")]
+    public static extern uint GetDpiForWindow(IntPtr hWnd);  // Win10 v1607+
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetDC(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+
+    [DllImport("gdi32.dll")]
+    public static extern int GetDeviceCaps(IntPtr hdc, int nIndex);
+    // LOGPIXELSX = 88
+
     public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
     [StructLayout(LayoutKind.Sequential)]
@@ -97,6 +115,26 @@ public class Win32 {
     }
 }
 "@
+
+function Get-DpiScale {
+    param([IntPtr]$Hwnd)
+    # Try GetDpiForWindow first (Win10 v1607+). Returns 0 on older Windows.
+    if ($Hwnd -ne [IntPtr]::Zero) {
+        try {
+            $dpi = [Win32]::GetDpiForWindow($Hwnd)
+            if ($dpi -gt 0) { return $dpi / 96.0 }
+        } catch {}
+    }
+    # Fallback: GetDeviceCaps on desktop DC (works on all Windows versions, returns system DPI)
+    $hdc = [Win32]::GetDC([IntPtr]::Zero)
+    try {
+        $dpi = [Win32]::GetDeviceCaps($hdc, 88)  # LOGPIXELSX
+        if ($dpi -gt 0) { return $dpi / 96.0 }
+    } finally {
+        [Win32]::ReleaseDC([IntPtr]::Zero, $hdc) | Out-Null
+    }
+    return 1.0
+}
 
 # Enable DPI awareness for accurate window dimensions
 [Win32]::SetProcessDPIAware() | Out-Null
@@ -322,6 +360,31 @@ try {
         }
     }
 
+    # DPI downscale: convert physical pixels to logical pixels when requested
+    # Must happen after crop (crop coords are in native pixels) and before MaxWidth
+    # (so max_width applies to logical pixel dimensions, not raw physical ones).
+    if ($DpiMode -eq "logical") {
+        # Read OS DPI for the capture target (not the bitmap's embedded DPI, which is
+        # always 96 for a freshly allocated System.Drawing.Bitmap and is useless here).
+        # Window mode: ask for the window's own DPI (per-monitor DPI aware).
+        # Screen mode: pass Zero → falls back to GetDeviceCaps on the desktop DC (system DPI).
+        $scale = Get-DpiScale -Hwnd $foundHandle
+
+        if ($scale -gt 1.0) {
+            $newW = [int]($bitmap.Width  / $scale)
+            $newH = [int]($bitmap.Height / $scale)
+            $resizedDpi = New-Object System.Drawing.Bitmap($newW, $newH)
+            $gScale = [System.Drawing.Graphics]::FromImage($resizedDpi)
+            $gScale.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+            $gScale.DrawImage($bitmap, 0, 0, $newW, $newH)
+            $gScale.Dispose()
+            $bitmap.Dispose()
+            $bitmap = $resizedDpi
+            $width  = $newW
+            $height = $newH
+        }
+    }
+
     # Resize if MaxWidth is set and image is wider
     if ($MaxWidth -gt 0 -and $width -gt $MaxWidth) {
         $ratio = $MaxWidth / $width
@@ -359,7 +422,7 @@ try {
         processId = $foundProcessId
         width = $width
         height = $height
-    } | ConvertTo-Json -Compress
+    } | ConvertTo-Json -Compress -Depth 5
 
     Write-Output $result
 }
