@@ -31,6 +31,7 @@ export function seeWindow(
 	windowTitle: string | undefined,
 	processName?: string,
 	timeoutMs = 30000,
+	mode?: "full" | "text",
 ): Promise<SeeResult> {
 	return new Promise((resolve_, reject) => {
 		const scriptPath = resolve(__dirname, "..", "scripts", "see.ps1");
@@ -50,6 +51,9 @@ export function seeWindow(
 		}
 		if (processName !== undefined) {
 			args.push("-ProcessName", processName);
+		}
+		if (mode !== undefined) {
+			args.push("-Mode", mode);
 		}
 
 		const child = execFile(
