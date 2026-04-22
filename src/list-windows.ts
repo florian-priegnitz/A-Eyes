@@ -14,6 +14,8 @@ export interface WindowInfo {
 	width: number;
 	height: number;
 	minimized: boolean;
+	isActive: boolean;
+	windowCount: number;
 }
 
 export interface ListWindowsResult {
@@ -70,8 +72,13 @@ export function listWindows(timeoutMs = 15000): Promise<ListWindowsResult> {
 						reject(new Error(result.error));
 						return;
 					}
+					const windows = (result.windows || []).map((w) => ({
+						...w,
+						isActive: w.isActive ?? false,
+						windowCount: w.windowCount ?? 1,
+					}));
 					resolve_({
-						windows: result.windows || [],
+						windows,
 						count: result.count || 0,
 					});
 				} catch {

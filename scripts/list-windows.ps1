@@ -29,6 +29,9 @@ public class WindowEnumerator {
     [DllImport("user32.dll")]
     public static extern bool IsIconic(IntPtr hWnd);
 
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+
     public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
 
     [StructLayout(LayoutKind.Sequential)]
@@ -43,6 +46,9 @@ public class WindowEnumerator {
 
 try {
     $windows = @()
+
+    # Capture foreground window handle once before enumeration
+    $script:foregroundHwnd = [WindowEnumerator]::GetForegroundWindow()
 
     $callback = [WindowEnumerator+EnumWindowsProc]{
         param($hWnd, $lParam)
@@ -80,6 +86,8 @@ try {
 
         $isMinimized = [WindowEnumerator]::IsIconic($hWnd)
 
+        $isActive = [bool]($hWnd.ToInt64() -eq $script:foregroundHwnd.ToInt64())
+
         $script:windows += @{
             title = $title
             processName = $processName
@@ -87,12 +95,28 @@ try {
             width = $width
             height = $height
             minimized = [bool]$isMinimized
+            isActive = $isActive
         }
 
         return $true
     }
 
     [WindowEnumerator]::EnumWindows($callback, [IntPtr]::Zero) | Out-Null
+
+    # Pass 2: compute windowCount per processId and assign back to each entry
+    # Note: avoid $pid — it's a PowerShell read-only automatic variable
+    $countByPid = @{}
+    foreach ($w in $windows) {
+        $procId = $w.processId
+        if ($countByPid.ContainsKey($procId)) {
+            $countByPid[$procId]++
+        } else {
+            $countByPid[$procId] = 1
+        }
+    }
+    foreach ($w in $windows) {
+        $w.windowCount = $countByPid[$w.processId]
+    }
 
     $result = @{
         windows = $windows
