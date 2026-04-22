@@ -7,7 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Ambient Awareness push strategy committed to `notifications/claude/channel` over standard MCP notifications — see ADR-004. Validation (#25) found that Claude Code v2.1.58 does not surface `notifications/message` or `notifications/resources/updated` to the model; channels (v2.1.80+) do. Downstream features #27/#28/#29 adopt channels.
+
 ### Added
+- `docs/adr/004-mcp-channels-over-notifications.md` — decision record for channels-as-push.
+- `scripts/push-test-server.mjs` — minimal harness emitting standard MCP notifications every 5s. Confirmed negative result against Claude Code v2.1.58.
+- `scripts/channel-test-server.mjs` — minimal harness emitting `notifications/claude/channel` via the `experimental: { "claude/channel": {} }` capability. Confirmed positive result against Claude Code v2.1.80+.
 - Full-screen capture mode — `capture` and `query` tools now support `mode: "screen"` parameter to capture the entire primary monitor instead of a specific window. Requires `"__screen__"` in allowlist for security. PowerShell uses `Screen.PrimaryScreen.Bounds` + `CopyFromScreen()`.
 - `processes` MCP tool — lists running Windows processes with CPU usage, memory (MB), and PID. Supports `name` filter (substring), `limit` (default 30), and `sort_by` (`cpu`/`memory`). Implemented via `Get-Process` in PowerShell, audit-logged.
 - `clipboard` MCP tool — reads current Windows clipboard content (text → string, image → base64 PNG, or empty) and writes text to the clipboard. Implemented via `System.Windows.Forms.Clipboard` in PowerShell, no shell interpolation, audit-logged.
