@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory=$false)]
-    [ValidateSet("read", "write")]
+    [ValidateSet("read", "write", "write-image")]
     [string]$Action = "read",
 
     [Parameter(Mandatory=$false)]
@@ -18,6 +18,25 @@ function Write-JsonError {
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+
+if ($Action -eq "write-image") {
+    $stream = $null
+    $bitmap = $null
+    try {
+        $base64 = [Console]::In.ReadToEnd().Trim()
+        $bytes = [System.Convert]::FromBase64String($base64)
+        $stream = New-Object System.IO.MemoryStream(,$bytes)
+        $bitmap = [System.Drawing.Image]::FromStream($stream)
+        [System.Windows.Forms.Clipboard]::SetImage($bitmap)
+        @{ success = $true } | ConvertTo-Json -Compress
+    } catch {
+        Write-JsonError "Failed to write image to clipboard: $($_.Exception.Message)"
+    } finally {
+        if ($bitmap) { $bitmap.Dispose() }
+        if ($stream) { $stream.Dispose() }
+    }
+    exit 0
+}
 
 if ($Action -eq "write") {
     if ($Text -eq "") {

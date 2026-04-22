@@ -1,10 +1,10 @@
-import type { AEyesConfig, RedactionRegion } from "./config.js";
+import type { AEyesConfig, RedactionRegion, RedactionRule } from "./config.js";
 
-export function findMatchingRules(
+export function findMatchingRedactionRules(
 	config: AEyesConfig,
 	windowTitle?: string,
 	processName?: string,
-): RedactionRegion[] {
+): RedactionRule[] {
 	if (!config.redaction_rules || config.redaction_rules.length === 0) {
 		return [];
 	}
@@ -17,7 +17,7 @@ export function findMatchingRules(
 		return [];
 	}
 
-	const regions: RedactionRegion[] = [];
+	const matchingRules: RedactionRule[] = [];
 
 	for (const rule of config.redaction_rules) {
 		let regex: RegExp;
@@ -27,11 +27,19 @@ export function findMatchingRules(
 			continue;
 		}
 		if (candidates.some((c) => regex.test(c))) {
-			regions.push(...rule.regions);
+			matchingRules.push(rule);
 		}
 	}
 
-	return regions;
+	return matchingRules;
+}
+
+export function findMatchingRules(
+	config: AEyesConfig,
+	windowTitle?: string,
+	processName?: string,
+): RedactionRegion[] {
+	return findMatchingRedactionRules(config, windowTitle, processName).flatMap((r) => r.regions);
 }
 
 export interface RedactionResult {
