@@ -1,7 +1,14 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const PACKAGE_ROOT_CONFIG = resolve(
+	dirname(fileURLToPath(import.meta.url)),
+	"..",
+	"a-eyes.config.json",
+);
 
 const { mockHomeDir } = vi.hoisted(() => {
 	let dir = "";
@@ -130,6 +137,7 @@ describe("loadConfig", () => {
 describe("loadConfig search chain", () => {
 	let cwdDir: string;
 	let homeDir: string;
+	let originalPackageRootConfig: string | null = null;
 	const originalCwd = process.cwd;
 
 	beforeEach(async () => {
@@ -137,6 +145,15 @@ describe("loadConfig search chain", () => {
 		homeDir = await mkdtemp(join(tmpdir(), "a-eyes-home-"));
 		process.cwd = () => cwdDir;
 		mockHomeDir.set(homeDir);
+
+		// Back up any existing package-root config, then install test fixture so
+		// the "falls back to package root" tests find a known allowlist.
+		try {
+			originalPackageRootConfig = await readFile(PACKAGE_ROOT_CONFIG, "utf-8");
+		} catch {
+			originalPackageRootConfig = null;
+		}
+		await writeFile(PACKAGE_ROOT_CONFIG, JSON.stringify({ allowlist: ["PackageRootFixture"] }));
 	});
 
 	afterEach(async () => {
@@ -144,6 +161,13 @@ describe("loadConfig search chain", () => {
 		mockHomeDir.set("");
 		await rm(cwdDir, { recursive: true });
 		await rm(homeDir, { recursive: true });
+
+		// Restore original package-root config (or remove fixture if there was none).
+		if (originalPackageRootConfig !== null) {
+			await writeFile(PACKAGE_ROOT_CONFIG, originalPackageRootConfig);
+		} else {
+			await rm(PACKAGE_ROOT_CONFIG, { force: true });
+		}
 	});
 
 	it("prefers cwd config over home config", async () => {
