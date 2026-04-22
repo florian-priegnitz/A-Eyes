@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { detectExistingConfig, writeConfig } from "../src/setup.js";
 
@@ -38,7 +39,7 @@ describe("detectExistingConfig", () => {
 
 	it("detects config in home dir when cwd has none", async () => {
 		readFileMock.mockImplementation((path: string) => {
-			if (path.includes(".a-eyes/config.json")) {
+			if (path.includes(join(".a-eyes", "config.json"))) {
 				return Promise.resolve(JSON.stringify({ allowlist: ["VS Code"] }));
 			}
 			return Promise.reject(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
@@ -66,7 +67,7 @@ describe("detectExistingConfig", () => {
 
 	it("detects config without allowlist", async () => {
 		readFileMock.mockImplementation((path: string) => {
-			if (path.includes(".a-eyes/config.json")) {
+			if (path.includes(join(".a-eyes", "config.json"))) {
 				return Promise.resolve(JSON.stringify({ save_screenshots: true }));
 			}
 			return Promise.reject(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
@@ -81,7 +82,7 @@ describe("detectExistingConfig", () => {
 
 	it("detects config with empty allowlist", async () => {
 		readFileMock.mockImplementation((path: string) => {
-			if (path.includes(".a-eyes/config.json")) {
+			if (path.includes(join(".a-eyes", "config.json"))) {
 				return Promise.resolve(JSON.stringify({ allowlist: [] }));
 			}
 			return Promise.reject(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
@@ -105,10 +106,10 @@ describe("writeConfig", () => {
 	it("writes config to ~/.a-eyes/config.json", async () => {
 		const path = await writeConfig(["Chrome", "VS Code"]);
 
-		expect(path).toBe("/home/testuser/.a-eyes/config.json");
-		expect(mkdirMock).toHaveBeenCalledWith("/home/testuser/.a-eyes", { recursive: true });
+		expect(path).toBe(join("/home/testuser", ".a-eyes", "config.json"));
+		expect(mkdirMock).toHaveBeenCalledWith(join("/home/testuser", ".a-eyes"), { recursive: true });
 		expect(writeFileMock).toHaveBeenCalledWith(
-			"/home/testuser/.a-eyes/config.json",
+			join("/home/testuser", ".a-eyes", "config.json"),
 			expect.stringContaining('"allowlist"'),
 			"utf-8",
 		);
