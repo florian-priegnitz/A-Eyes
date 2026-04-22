@@ -21,6 +21,7 @@ export function captureWindow(
 	processName?: string,
 	format?: "png" | "jpeg",
 	quality?: number,
+	mode?: "window" | "screen",
 ): Promise<CaptureResult> {
 	return new Promise((resolve_, reject) => {
 		const scriptPath = resolve(__dirname, "..", "scripts", "screenshot.ps1");
@@ -35,13 +36,17 @@ export function captureWindow(
 			winScriptPath,
 		];
 
-		if (windowTitle !== undefined) {
-			// execFile passes argv directly; no shell-style quoting required.
-			args.push("-WindowTitle", windowTitle);
-		}
+		if (mode === "screen") {
+			args.push("-Mode", "screen");
+		} else {
+			if (windowTitle !== undefined) {
+				// execFile passes argv directly; no shell-style quoting required.
+				args.push("-WindowTitle", windowTitle);
+			}
 
-		if (processName !== undefined) {
-			args.push("-ProcessName", processName);
+			if (processName !== undefined) {
+				args.push("-ProcessName", processName);
+			}
 		}
 
 		if (maxWidth !== undefined) {

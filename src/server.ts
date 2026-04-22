@@ -2,10 +2,15 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { writeAuditEntry } from "./audit-log.js";
 import { captureWindow } from "./capture.js";
+import { readClipboard, writeClipboard } from "./clipboard.js";
 import { type AEyesConfig, isWindowAllowed, loadConfig } from "./config.js";
+import { runCustomTool, validateCustomTool } from "./custom-tool.js";
+import { getEventLog } from "./event-log.js";
 import { runHealthCheck } from "./health-check.js";
 import { listWindows } from "./list-windows.js";
+import { getProcesses } from "./processes.js";
 import { RateLimiter } from "./rate-limiter.js";
+import { applyRedactions, findMatchingRules } from "./redact.js";
 import { resolveOutputPath, saveScreenshot } from "./save-screenshot.js";
 import { seeWindow } from "./see.js";
 import { detectExistingConfig, writeConfig } from "./setup.js";
@@ -20,6 +25,7 @@ export function createServer(): McpServer {
 		save_screenshots: false,
 		screenshot_dir: "./screenshots",
 		max_captures_per_minute: 0,
+		allow_event_log: false,
 	};
 	let configLoaded = false;
 	let configLoadPromise: Promise<AEyesConfig> | null = null;
@@ -47,9 +53,14 @@ export function createServer(): McpServer {
 	// --- capture tool ---
 	server.tool(
 		"capture",
-		"Capture a screenshot of a window by title or app name",
+		"Capture a screenshot of a window by title or app name. Omit both window_title and process_name to capture the currently focused foreground window.",
 		{
-			window_title: z.string().optional().describe("The window title or app name to capture"),
+			window_title: z
+				.string()
+				.optional()
+				.describe(
+					"The window title or app name to capture. Omit to capture the foreground window.",
+				),
 			process_name: z
 				.string()
 				.optional()
@@ -90,17 +101,41 @@ export function createServer(): McpServer {
 				.max(100)
 				.optional()
 				.describe("JPEG quality 1-100 (default: 85). Ignored for PNG."),
+			mode: z
+				.enum(["window", "screen"])
+				.default("window")
+				.describe(
+					"Capture mode: 'window' (default) captures a specific window, 'screen' captures the full primary monitor. In screen mode, window_title and process_name are ignored. Screen capture requires '__screen__' in the allowlist.",
+				),
 		},
-		async ({ window_title, process_name, output_path, max_width, crop, format, quality }) => {
+		async ({
+			window_title,
+			process_name,
+			output_path,
+			max_width,
+			crop,
+			format,
+			quality,
+			mode: rawMode,
+		}) => {
 			const startTime = Date.now();
+			const mode = rawMode ?? "window";
+			const isScreen = mode === "screen";
+			const isFrontmost = !isScreen && !window_title && !process_name;
 
-			if (!window_title && !process_name) {
-				const message = "At least one of window_title or process_name must be provided.";
+			const cfg = await ensureConfig();
+
+			// For screen captures, check the allowlist using the __screen__ sentinel.
+			if (isScreen && !isWindowAllowed(cfg, "__screen__", undefined)) {
+				const message =
+					!cfg.allowlist || cfg.allowlist.length === 0
+						? "No allowlist configured. Use the setup tool to create one, or add an allowlist manually to a-eyes.config.json."
+						: "Screen capture is not enabled. Add '__screen__' to the allowlist in a-eyes.config.json to allow it.";
 				writeAuditEntry({
 					timestamp: new Date(startTime).toISOString(),
 					tool: "capture",
-					params: { window_title, process_name },
-					result: "error",
+					params: { mode },
+					result: "blocked",
 					duration_ms: Date.now() - startTime,
 					error: message,
 				}).catch((err) => console.error("Audit log error:", err));
@@ -110,9 +145,9 @@ export function createServer(): McpServer {
 				};
 			}
 
-			const cfg = await ensureConfig();
-
-			if (!isWindowAllowed(cfg, window_title, process_name)) {
+			// For named windows, check the allowlist before capturing.
+			// For frontmost captures, the allowlist is checked after capture using the returned metadata.
+			if (!isScreen && !isFrontmost && !isWindowAllowed(cfg, window_title, process_name)) {
 				const message =
 					!cfg.allowlist || cfg.allowlist.length === 0
 						? "No allowlist configured. Use the setup tool to create one, or add an allowlist manually to a-eyes.config.json."
@@ -158,7 +193,37 @@ export function createServer(): McpServer {
 					process_name,
 					format,
 					quality,
+					mode,
 				);
+
+				// For frontmost captures, check the allowlist against the actual window metadata.
+				if (isFrontmost && !isWindowAllowed(cfg, result.windowTitle, result.processName)) {
+					const message =
+						!cfg.allowlist || cfg.allowlist.length === 0
+							? "No allowlist configured. Use the setup tool to create one, or add an allowlist manually to a-eyes.config.json."
+							: `Window "${result.windowTitle}" is not in the allowlist. Allowed windows: ${cfg.allowlist.join(", ")}`;
+					writeAuditEntry({
+						timestamp: new Date(startTime).toISOString(),
+						tool: "capture",
+						params: { window_title, process_name },
+						result: "blocked",
+						duration_ms: Date.now() - startTime,
+						error: message,
+					}).catch((err) => console.error("Audit log error:", err));
+					return {
+						content: [{ type: "text", text: message }],
+						isError: true,
+					};
+				}
+
+				// Apply redaction if rules match
+				const redactionRegions = findMatchingRules(cfg, result.windowTitle, result.processName);
+				let redactedCount = 0;
+				if (redactionRegions.length > 0) {
+					const redactionResult = await applyRedactions(result.base64, redactionRegions);
+					result.base64 = redactionResult.base64;
+					redactedCount = redactionResult.redactedCount;
+				}
 
 				// Determine if/where to save
 				let savedPath: string | undefined;
@@ -175,7 +240,9 @@ export function createServer(): McpServer {
 					}
 				}
 
-				let statusText = `Screenshot of "${result.windowTitle}" captured successfully.`;
+				let statusText = isScreen
+					? "Full screen captured successfully."
+					: `Screenshot of "${result.windowTitle}" captured successfully.`;
 				if (savedPath) {
 					statusText += ` Saved to: ${savedPath}`;
 				}
@@ -186,7 +253,7 @@ export function createServer(): McpServer {
 				writeAuditEntry({
 					timestamp: new Date(startTime).toISOString(),
 					tool: "capture",
-					params: { window_title, process_name },
+					params: { window_title, process_name, mode },
 					result: "success",
 					duration_ms: Date.now() - startTime,
 				}).catch((err) => console.error("Audit log error:", err));
@@ -279,14 +346,19 @@ export function createServer(): McpServer {
 	// --- query tool ---
 	server.tool(
 		"query",
-		"Capture a screenshot of a window and ask a question about its content",
+		"Capture a screenshot of a window and ask a question about its content. Omit both window_title and process_name to capture the currently focused foreground window.",
 		{
-			window_title: z.string().optional().describe("The window title or app name to capture"),
+			window_title: z
+				.string()
+				.optional()
+				.describe(
+					"The window title or app name to capture. Omit to capture the foreground window.",
+				),
 			process_name: z
 				.string()
 				.optional()
 				.describe(
-					"The process name to capture (e.g. 'chrome', 'Unity'). More stable than window titles which change dynamically.",
+					"The process name to capture (e.g. 'chrome', 'Unity'). More stable than window titles which change dynamically. Omit to capture the foreground window.",
 				),
 			question: z.string().describe("Question to answer about the screenshot content"),
 			max_width: z
@@ -319,17 +391,41 @@ export function createServer(): McpServer {
 				.max(100)
 				.optional()
 				.describe("JPEG quality 1-100 (default: 85). Ignored for PNG."),
+			mode: z
+				.enum(["window", "screen"])
+				.default("window")
+				.describe(
+					"Capture mode: 'window' (default) captures a specific window, 'screen' captures the full primary monitor. In screen mode, window_title and process_name are ignored. Screen capture requires '__screen__' in the allowlist.",
+				),
 		},
-		async ({ window_title, process_name, question, max_width, crop, format, quality }) => {
+		async ({
+			window_title,
+			process_name,
+			question,
+			max_width,
+			crop,
+			format,
+			quality,
+			mode: rawMode,
+		}) => {
 			const startTime = Date.now();
+			const mode = rawMode ?? "window";
+			const isScreen = mode === "screen";
+			const isFrontmost = !isScreen && !window_title && !process_name;
 
-			if (!window_title && !process_name) {
-				const message = "At least one of window_title or process_name must be provided.";
+			const cfg = await ensureConfig();
+
+			// For screen captures, check the allowlist using the __screen__ sentinel.
+			if (isScreen && !isWindowAllowed(cfg, "__screen__", undefined)) {
+				const message =
+					!cfg.allowlist || cfg.allowlist.length === 0
+						? "No allowlist configured. Use the setup tool to create one, or add an allowlist manually to a-eyes.config.json."
+						: "Screen capture is not enabled. Add '__screen__' to the allowlist in a-eyes.config.json to allow it.";
 				writeAuditEntry({
 					timestamp: new Date(startTime).toISOString(),
 					tool: "query",
-					params: { window_title, process_name, question },
-					result: "error",
+					params: { mode, question },
+					result: "blocked",
 					duration_ms: Date.now() - startTime,
 					error: message,
 				}).catch((err) => console.error("Audit log error:", err));
@@ -339,9 +435,9 @@ export function createServer(): McpServer {
 				};
 			}
 
-			const cfg = await ensureConfig();
-
-			if (!isWindowAllowed(cfg, window_title, process_name)) {
+			// For named windows, check the allowlist before capturing.
+			// For frontmost captures, the allowlist is checked after capture using the returned metadata.
+			if (!isScreen && !isFrontmost && !isWindowAllowed(cfg, window_title, process_name)) {
 				const message =
 					!cfg.allowlist || cfg.allowlist.length === 0
 						? "No allowlist configured. Use the setup tool to create one, or add an allowlist manually to a-eyes.config.json."
@@ -387,11 +483,47 @@ export function createServer(): McpServer {
 					process_name,
 					format,
 					quality,
+					mode,
 				);
+
+				// For frontmost captures, check the allowlist against the actual window metadata.
+				if (isFrontmost && !isWindowAllowed(cfg, result.windowTitle, result.processName)) {
+					const message =
+						!cfg.allowlist || cfg.allowlist.length === 0
+							? "No allowlist configured. Use the setup tool to create one, or add an allowlist manually to a-eyes.config.json."
+							: `Window "${result.windowTitle}" is not in the allowlist. Allowed windows: ${cfg.allowlist.join(", ")}`;
+					writeAuditEntry({
+						timestamp: new Date(startTime).toISOString(),
+						tool: "query",
+						params: { window_title, process_name, question },
+						result: "blocked",
+						duration_ms: Date.now() - startTime,
+						error: message,
+					}).catch((err) => console.error("Audit log error:", err));
+					return {
+						content: [{ type: "text", text: message }],
+						isError: true,
+					};
+				}
+
+				// Apply redaction if rules match
+				const queryRedactionRegions = findMatchingRules(
+					cfg,
+					result.windowTitle,
+					result.processName,
+				);
+				if (queryRedactionRegions.length > 0) {
+					const redactionResult = await applyRedactions(result.base64, queryRedactionRegions);
+					result.base64 = redactionResult.base64;
+				}
+
+				const captureDescription = isScreen
+					? "Full screen"
+					: `Screenshot of "${result.windowTitle}"`;
 				writeAuditEntry({
 					timestamp: new Date(startTime).toISOString(),
 					tool: "query",
-					params: { window_title, process_name, question },
+					params: { window_title, process_name, question, mode },
 					result: "success",
 					duration_ms: Date.now() - startTime,
 				}).catch((err) => console.error("Audit log error:", err));
@@ -404,7 +536,7 @@ export function createServer(): McpServer {
 						},
 						{
 							type: "text",
-							text: `Screenshot of "${result.windowTitle}" captured. Please answer the following question about this screenshot:\n\n${question}`,
+							text: `${captureDescription} captured. Please answer the following question about this screenshot:\n\n${question}`,
 						},
 					],
 				};
@@ -434,38 +566,30 @@ export function createServer(): McpServer {
 	// --- see tool ---
 	server.tool(
 		"see",
-		"Capture a window and return its UI element tree (buttons, text fields, labels, etc.) plus a screenshot. Use this to understand what is visible in an application without asking a specific question.",
+		"Capture a window and return its UI element tree (buttons, text fields, labels, etc.) plus a screenshot. Use this to understand what is visible in an application without asking a specific question. Omit both window_title and process_name to inspect the currently focused foreground window.",
 		{
-			window_title: z.string().optional().describe("The window title or app name to inspect"),
+			window_title: z
+				.string()
+				.optional()
+				.describe(
+					"The window title or app name to inspect. Omit to inspect the foreground window.",
+				),
 			process_name: z
 				.string()
 				.optional()
 				.describe(
-					"The process name to inspect (e.g. 'chrome', 'notepad'). More stable than window titles.",
+					"The process name to inspect (e.g. 'chrome', 'notepad'). More stable than window titles. Omit to inspect the foreground window.",
 				),
 		},
 		async ({ window_title, process_name }) => {
 			const startTime = Date.now();
-
-			if (!window_title && !process_name) {
-				const message = "At least one of window_title or process_name must be provided.";
-				writeAuditEntry({
-					timestamp: new Date(startTime).toISOString(),
-					tool: "see",
-					params: { window_title, process_name },
-					result: "error",
-					duration_ms: Date.now() - startTime,
-					error: message,
-				}).catch((err) => console.error("Audit log error:", err));
-				return {
-					content: [{ type: "text", text: message }],
-					isError: true,
-				};
-			}
+			const isFrontmost = !window_title && !process_name;
 
 			const cfg = await ensureConfig();
 
-			if (!isWindowAllowed(cfg, window_title, process_name)) {
+			// For named windows, check the allowlist before capturing.
+			// For frontmost captures, the allowlist is checked after capture using the returned metadata.
+			if (!isFrontmost && !isWindowAllowed(cfg, window_title, process_name)) {
 				const message =
 					!cfg.allowlist || cfg.allowlist.length === 0
 						? "No allowlist configured. Use the setup tool to create one, or add an allowlist manually to a-eyes.config.json."
@@ -505,6 +629,26 @@ export function createServer(): McpServer {
 				rateLimiter.record();
 				const result = await seeWindow(window_title, process_name);
 
+				// For frontmost captures, check the allowlist against the actual window metadata.
+				if (isFrontmost && !isWindowAllowed(cfg, result.windowTitle, result.processName)) {
+					const message =
+						!cfg.allowlist || cfg.allowlist.length === 0
+							? "No allowlist configured. Use the setup tool to create one, or add an allowlist manually to a-eyes.config.json."
+							: `Window "${result.windowTitle}" is not in the allowlist. Allowed windows: ${cfg.allowlist.join(", ")}`;
+					writeAuditEntry({
+						timestamp: new Date(startTime).toISOString(),
+						tool: "see",
+						params: { window_title, process_name },
+						result: "blocked",
+						duration_ms: Date.now() - startTime,
+						error: message,
+					}).catch((err) => console.error("Audit log error:", err));
+					return {
+						content: [{ type: "text", text: message }],
+						isError: true,
+					};
+				}
+
 				// Format element list as readable text
 				const elementLines = result.elements.slice(0, 50).map((el) => {
 					const parts = [`[${el.type}]`, `"${el.name}"`];
@@ -515,14 +659,9 @@ export function createServer(): McpServer {
 				});
 
 				const truncated =
-					result.elementCount > 50
-						? `\n  ... and ${result.elementCount - 50} more elements`
-						: "";
+					result.elementCount > 50 ? `\n  ... and ${result.elementCount - 50} more elements` : "";
 
-				let summaryText =
-					`Window: "${result.windowTitle}" [${result.processName}] — ${result.windowWidth}x${result.windowHeight}\n` +
-					`UI Elements (${result.elementCount} total):\n` +
-					(elementLines.length > 0 ? elementLines.join("\n") + truncated : "  (none found)");
+				let summaryText = `Window: "${result.windowTitle}" [${result.processName}] — ${result.windowWidth}x${result.windowHeight}\nUI Elements (${result.elementCount} total):\n${elementLines.length > 0 ? elementLines.join("\n") + truncated : "  (none found)"}`;
 
 				if (result.text) {
 					summaryText += `\n\nVisible text:\n  ${result.text}`;
@@ -537,9 +676,21 @@ export function createServer(): McpServer {
 				}).catch((err) => console.error("Audit log error:", err));
 
 				if (result.image) {
+					// Apply redaction if rules match
+					let imageData = result.image;
+					const seeRedactionRegions = findMatchingRules(
+						cfg,
+						result.windowTitle,
+						result.processName,
+					);
+					if (seeRedactionRegions.length > 0) {
+						const redactionResult = await applyRedactions(imageData, seeRedactionRegions);
+						imageData = redactionResult.base64;
+					}
+
 					return {
 						content: [
-							{ type: "image" as const, data: result.image, mimeType: "image/png" },
+							{ type: "image" as const, data: imageData, mimeType: "image/png" },
 							{ type: "text" as const, text: summaryText },
 						],
 					};
@@ -560,6 +711,124 @@ export function createServer(): McpServer {
 				}).catch((auditErr) => console.error("Audit log error:", auditErr));
 				return {
 					content: [{ type: "text", text: `Failed to inspect window: ${message}` }],
+					isError: true,
+				};
+			}
+		},
+	);
+
+	// --- clipboard tool ---
+	server.tool(
+		"clipboard",
+		"Read the current Windows clipboard content (text or image), or write text to it. Reading an image returns it as base64 PNG.",
+		{
+			action: z
+				.enum(["read", "write"])
+				.default("read")
+				.describe("'read' returns current clipboard content, 'write' sets clipboard text"),
+			text: z
+				.string()
+				.optional()
+				.describe("Text to write to clipboard (required when action is 'write')"),
+		},
+		async ({ action, text }) => {
+			const startTime = Date.now();
+
+			if (action === "write") {
+				if (text === undefined || text === "") {
+					const message = "text parameter is required when action is 'write'";
+					writeAuditEntry({
+						timestamp: new Date(startTime).toISOString(),
+						tool: "clipboard",
+						params: { action },
+						result: "error",
+						duration_ms: Date.now() - startTime,
+						error: message,
+					}).catch((err) => console.error("Audit log error:", err));
+					return {
+						content: [{ type: "text", text: message }],
+						isError: true,
+					};
+				}
+
+				try {
+					await writeClipboard(text);
+					writeAuditEntry({
+						timestamp: new Date(startTime).toISOString(),
+						tool: "clipboard",
+						params: { action },
+						result: "success",
+						duration_ms: Date.now() - startTime,
+					}).catch((err) => console.error("Audit log error:", err));
+					return {
+						content: [{ type: "text", text: "Text written to clipboard successfully." }],
+					};
+				} catch (err) {
+					const message = err instanceof Error ? err.message : String(err);
+					writeAuditEntry({
+						timestamp: new Date(startTime).toISOString(),
+						tool: "clipboard",
+						params: { action },
+						result: "error",
+						duration_ms: Date.now() - startTime,
+						error: message,
+					}).catch((auditErr) => console.error("Audit log error:", auditErr));
+					return {
+						content: [{ type: "text", text: `Failed to write to clipboard: ${message}` }],
+						isError: true,
+					};
+				}
+			}
+
+			// action === "read"
+			try {
+				const result = await readClipboard();
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "clipboard",
+					params: { action },
+					result: "success",
+					duration_ms: Date.now() - startTime,
+				}).catch((err) => console.error("Audit log error:", err));
+
+				if (result.type === "text") {
+					return {
+						content: [{ type: "text", text: result.content }],
+					};
+				}
+
+				if (result.type === "image") {
+					return {
+						content: [
+							{
+								type: "image",
+								data: result.data,
+								mimeType: "image/png",
+							},
+							{
+								type: "text",
+								text: `Clipboard image: ${result.width}x${result.height} pixels`,
+							},
+						],
+					};
+				}
+
+				// empty
+				return {
+					content: [{ type: "text", text: "Clipboard is empty." }],
+				};
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "clipboard",
+					params: { action },
+					result: "error",
+					duration_ms: Date.now() - startTime,
+					error: message,
+				}).catch((auditErr) => console.error("Audit log error:", auditErr));
+				return {
+					content: [{ type: "text", text: `Failed to read clipboard: ${message}` }],
 					isError: true,
 				};
 			}
@@ -709,6 +978,296 @@ export function createServer(): McpServer {
 							text: `Failed to write config: ${message}`,
 						},
 					],
+					isError: true,
+				};
+			}
+		},
+	);
+
+	// --- processes tool ---
+	server.tool(
+		"processes",
+		"List running Windows processes with CPU usage, memory, and PID. Useful for diagnosing performance issues or checking if a specific app/service is running. Omit name to get the top processes by CPU.",
+		{
+			name: z
+				.string()
+				.optional()
+				.describe("Filter by process name (substring match, e.g. 'node', 'chrome')"),
+			limit: z
+				.number()
+				.int()
+				.min(1)
+				.max(200)
+				.default(30)
+				.describe("Max processes to return (default: 30)"),
+			sort_by: z
+				.enum(["cpu", "memory"])
+				.default("cpu")
+				.describe("Sort by CPU usage or memory (default: cpu)"),
+		},
+		async ({ name, limit, sort_by }) => {
+			const startTime = Date.now();
+
+			try {
+				const processes = await getProcesses({ name, limit, sortBy: sort_by });
+
+				const header = "PID      Name                         CPU(s)   Memory(MB)  Status";
+				const separator = "------   --------------------------   ------   ----------  ------";
+				const rows = processes.map((p) => {
+					const pid = String(p.Id).padEnd(8);
+					const pname = p.ProcessName.slice(0, 26).padEnd(28);
+					const cpu = String(p.cpu).padStart(6);
+					const mem = String(p.memoryMB).padStart(10);
+					return `${pid} ${pname} ${cpu}   ${mem}  ${p.status}`;
+				});
+
+				const tableText = [header, separator, ...rows].join("\n");
+				const jsonText = JSON.stringify(processes, null, 2);
+				const filterNote = name ? ` (filtered by "${name}")` : "";
+				const summaryText =
+					`Found ${processes.length} processes${filterNote}, sorted by ${sort_by}:\n\n${tableText}\n\n` +
+					`Raw JSON:\n${jsonText}`;
+
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "processes",
+					params: { name, limit, sort_by },
+					result: "success",
+					duration_ms: Date.now() - startTime,
+				}).catch((err) => console.error("Audit log error:", err));
+
+				return {
+					content: [{ type: "text", text: summaryText }],
+				};
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "processes",
+					params: { name, limit, sort_by },
+					result: "error",
+					duration_ms: Date.now() - startTime,
+					error: message,
+				}).catch((auditErr) => console.error("Audit log error:", auditErr));
+				return {
+					content: [{ type: "text", text: `Failed to list processes: ${message}` }],
+					isError: true,
+				};
+			}
+		},
+	);
+
+	// --- event_log tool ---
+	server.tool(
+		"event_log",
+		"Read recent entries from the Windows Event Log (Application, System). Useful for diagnosing crashes, service failures, driver issues, and .NET errors. Requires allow_event_log: true in config.",
+		{
+			source: z
+				.enum(["Application", "System", "both"])
+				.default("both")
+				.describe("Event log source (default: both)"),
+			count: z
+				.number()
+				.int()
+				.min(1)
+				.max(100)
+				.default(20)
+				.describe("Max entries to return (default: 20)"),
+			level: z
+				.enum(["error", "warning", "all"])
+				.default("error")
+				.describe("Minimum severity level (default: error)"),
+		},
+		async ({ source, count, level }) => {
+			const startTime = Date.now();
+			await ensureConfig();
+
+			if (!config.allow_event_log) {
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "event_log",
+					params: { source, count, level },
+					result: "denied",
+					duration_ms: Date.now() - startTime,
+					error: "event_log not enabled in config",
+				}).catch((err) => console.error("Audit log error:", err));
+				return {
+					content: [
+						{
+							type: "text",
+							text: 'Event log access is disabled. Set "allow_event_log": true in a-eyes.config.json to enable.',
+						},
+					],
+					isError: true,
+				};
+			}
+
+			try {
+				const entries = await getEventLog({ source, count, level });
+
+				if (entries.length === 0) {
+					writeAuditEntry({
+						timestamp: new Date(startTime).toISOString(),
+						tool: "event_log",
+						params: { source, count, level },
+						result: "success",
+						duration_ms: Date.now() - startTime,
+					}).catch((err) => console.error("Audit log error:", err));
+					return {
+						content: [
+							{
+								type: "text",
+								text: `No event log entries found (source: ${source}, level: ${level}).`,
+							},
+						],
+					};
+				}
+
+				const header =
+					"Timestamp                          Level      Provider                         Message";
+				const separator =
+					"--------------------------------   --------   ------------------------------   --------------------";
+				const rows = entries.map((e) => {
+					const ts = e.timestamp.slice(0, 23).padEnd(34);
+					const lvl = (e.level || "Unknown").slice(0, 8).padEnd(10);
+					const prov = (e.provider || "").slice(0, 30).padEnd(32);
+					const msg = (e.message || "").split("\n")[0].slice(0, 80);
+					return `${ts} ${lvl} ${prov} ${msg}`;
+				});
+
+				const tableText = [header, separator, ...rows].join("\n");
+				const jsonText = JSON.stringify(entries, null, 2);
+				const summaryText = `Found ${entries.length} event log entries (source: ${source}, level: ${level}):\n\n${tableText}\n\nRaw JSON:\n${jsonText}`;
+
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "event_log",
+					params: { source, count, level },
+					result: "success",
+					duration_ms: Date.now() - startTime,
+				}).catch((err) => console.error("Audit log error:", err));
+
+				return {
+					content: [{ type: "text", text: summaryText }],
+				};
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "event_log",
+					params: { source, count, level },
+					result: "error",
+					duration_ms: Date.now() - startTime,
+					error: message,
+				}).catch((auditErr) => console.error("Audit log error:", auditErr));
+				return {
+					content: [{ type: "text", text: `Failed to read event log: ${message}` }],
+					isError: true,
+				};
+			}
+		},
+	);
+
+	// --- run_custom tool ---
+	server.tool(
+		"run_custom",
+		"Run a custom PowerShell tool registered in a-eyes.config.json. Use list_custom_tools to see available tools.",
+		{
+			tool_name: z.string().describe("Name of the custom tool to run"),
+			params: z
+				.record(z.union([z.string(), z.number(), z.boolean()]))
+				.optional()
+				.default({})
+				.describe("Parameters to pass to the tool script"),
+		},
+		async ({ tool_name, params }) => {
+			const startTime = Date.now();
+			const cfg = await ensureConfig();
+
+			if (!cfg.custom_tools || cfg.custom_tools.length === 0) {
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "run_custom",
+					params: { tool_name },
+					result: "denied",
+					duration_ms: Date.now() - startTime,
+					error: "No custom tools configured",
+				}).catch((err) => console.error("Audit log error:", err));
+				return {
+					content: [
+						{
+							type: "text",
+							text: "No custom tools configured. Add custom_tools to a-eyes.config.json.",
+						},
+					],
+					isError: true,
+				};
+			}
+
+			const tool = cfg.custom_tools.find((t) => t.name === tool_name);
+			if (!tool) {
+				const available = cfg.custom_tools.map((t) => t.name).join(", ");
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "run_custom",
+					params: { tool_name },
+					result: "error",
+					duration_ms: Date.now() - startTime,
+					error: `Tool "${tool_name}" not found`,
+				}).catch((err) => console.error("Audit log error:", err));
+				return {
+					content: [
+						{
+							type: "text",
+							text: `Custom tool "${tool_name}" not found. Available: ${available}`,
+						},
+					],
+					isError: true,
+				};
+			}
+
+			const validationError = await validateCustomTool(tool);
+			if (validationError) {
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "run_custom",
+					params: { tool_name, ...params },
+					result: "error",
+					duration_ms: Date.now() - startTime,
+					error: validationError,
+				}).catch((err) => console.error("Audit log error:", err));
+				return {
+					content: [{ type: "text", text: validationError }],
+					isError: true,
+				};
+			}
+
+			try {
+				const output = await runCustomTool(tool, params);
+
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "run_custom",
+					params: { tool_name, ...params },
+					result: "success",
+					duration_ms: Date.now() - startTime,
+				}).catch((err) => console.error("Audit log error:", err));
+
+				return {
+					content: [{ type: "text", text: output }],
+				};
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				writeAuditEntry({
+					timestamp: new Date(startTime).toISOString(),
+					tool: "run_custom",
+					params: { tool_name, ...params },
+					result: "error",
+					duration_ms: Date.now() - startTime,
+					error: message,
+				}).catch((auditErr) => console.error("Audit log error:", auditErr));
+				return {
+					content: [{ type: "text", text: `Custom tool failed: ${message}` }],
 					isError: true,
 				};
 			}

@@ -74,7 +74,9 @@ describe("resolveOutputPath", () => {
 
 	it("appends generated filename when path is a directory", () => {
 		const result = resolveOutputPath("/tmp/screenshots", "Chrome");
-		expect(result).toMatch(/^\/tmp\/screenshots\/Chrome_\d{8}_\d{6}\.png$/);
+		const prefix = join("/tmp/screenshots", "Chrome_").slice(0, -"Chrome_".length);
+		expect(result.startsWith(prefix)).toBe(true);
+		expect(result).toMatch(/Chrome_\d{8}_\d{6}\.png$/);
 	});
 
 	it("returns path as-is when it ends with .jpg", () => {
@@ -87,7 +89,9 @@ describe("resolveOutputPath", () => {
 
 	it("appends .jpg filename for jpeg format in directory", () => {
 		const result = resolveOutputPath("/tmp/screenshots", "Chrome", "jpeg");
-		expect(result).toMatch(/^\/tmp\/screenshots\/Chrome_\d{8}_\d{6}\.jpg$/);
+		const prefix = join("/tmp/screenshots", "Chrome_").slice(0, -"Chrome_".length);
+		expect(result.startsWith(prefix)).toBe(true);
+		expect(result).toMatch(/Chrome_\d{8}_\d{6}\.jpg$/);
 	});
 });
 

@@ -1,0 +1,11 @@
+# Enforce LF line endings for all text files.
+# Prevents biome lint failures on Windows CI runners where git's
+# core.autocrlf would otherwise convert committed LF files to CRLF
+# on checkout.
+* text=auto eol=lf
+
+# Explicit binary markers (defensive)
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary

@@ -2,7 +2,13 @@ import { readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type AuditEntry, getAuditLogPath, writeAuditEntry } from "../src/audit-log.js";
+import {
+	type AuditEntry,
+	_resetAuditCache,
+	getAuditLogPath,
+	writeAuditEntry,
+} from "../src/audit-log.js";
+import { _resetKeyCache } from "../src/audit-signing.js";
 
 // Mock os.homedir so logs go to a temp directory
 const testDir = join(tmpdir(), `a-eyes-audit-test-${process.pid}`);
@@ -35,10 +41,14 @@ describe("getAuditLogPath", () => {
 
 describe("writeAuditEntry", () => {
 	beforeEach(async () => {
+		_resetAuditCache();
+		_resetKeyCache();
 		await rm(join(testDir, ".a-eyes"), { recursive: true, force: true });
 	});
 
 	afterEach(async () => {
+		_resetAuditCache();
+		_resetKeyCache();
 		await rm(join(testDir, ".a-eyes"), { recursive: true, force: true });
 	});
 
@@ -56,7 +66,10 @@ describe("writeAuditEntry", () => {
 		const logPath = join(testDir, ".a-eyes", "logs", "audit-2026-03-08.jsonl");
 		const content = await readFile(logPath, "utf-8");
 		const parsed = JSON.parse(content.trim());
-		expect(parsed).toEqual(entry);
+		expect(parsed).toMatchObject(entry);
+		expect(parsed.sig).toBeDefined();
+		expect(parsed.prev_hash).toBeDefined();
+		expect(parsed.sig).toHaveLength(64);
 	});
 
 	it("appends multiple entries to the same file", async () => {
@@ -82,8 +95,12 @@ describe("writeAuditEntry", () => {
 		const logPath = join(testDir, ".a-eyes", "logs", "audit-2026-03-08.jsonl");
 		const lines = (await readFile(logPath, "utf-8")).trim().split("\n");
 		expect(lines).toHaveLength(2);
-		expect(JSON.parse(lines[0])).toEqual(entry1);
-		expect(JSON.parse(lines[1])).toEqual(entry2);
+		const parsed0 = JSON.parse(lines[0]);
+		const parsed1 = JSON.parse(lines[1]);
+		expect(parsed0).toMatchObject(entry1);
+		expect(parsed1).toMatchObject(entry2);
+		// Verify hash chain
+		expect(parsed1.prev_hash).toBe(parsed0.sig);
 	});
 
 	it("includes optional error field", async () => {

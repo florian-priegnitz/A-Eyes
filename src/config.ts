@@ -6,11 +6,60 @@ import { z } from "zod";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 
+const PolicySchema = z.object({
+	pattern: z.string(),
+	action: z.enum(["allow", "deny"]),
+});
+
+export type Policy = z.infer<typeof PolicySchema>;
+
+const RedactionRegionSchema = z.object({
+	x: z.number().int().min(0),
+	y: z.number().int().min(0),
+	width: z.number().int().min(1),
+	height: z.number().int().min(1),
+	method: z.enum(["blackout", "blur", "pixelate"]).default("blackout"),
+});
+
+export type RedactionRegion = z.infer<typeof RedactionRegionSchema>;
+
+const RedactionRuleSchema = z.object({
+	match: z.string(),
+	regions: z.array(RedactionRegionSchema).min(1),
+});
+
+export type RedactionRule = z.infer<typeof RedactionRuleSchema>;
+
+const CustomToolParamSchema = z.object({
+	name: z.string(),
+	type: z.enum(["string", "number", "boolean"]).default("string"),
+	description: z.string().optional(),
+	required: z.boolean().default(false),
+});
+
+export type CustomToolParam = z.infer<typeof CustomToolParamSchema>;
+
+const CustomToolSchema = z.object({
+	name: z
+		.string()
+		.regex(/^[a-z][a-z0-9_]*$/, "Tool name must be lowercase alphanumeric with underscores"),
+	description: z.string(),
+	script: z.string(),
+	params: z.array(CustomToolParamSchema).optional(),
+	timeout_ms: z.number().int().min(1000).max(120000).default(15000),
+});
+
+export type CustomTool = z.infer<typeof CustomToolSchema>;
+
 const ConfigSchema = z.object({
 	allowlist: z.array(z.string()).optional(),
+	policies: z.array(PolicySchema).optional(),
+	redaction_rules: z.array(RedactionRuleSchema).optional(),
+	custom_tools: z.array(CustomToolSchema).optional(),
 	save_screenshots: z.boolean().default(false),
 	screenshot_dir: z.string().default("./screenshots"),
 	max_captures_per_minute: z.number().int().min(0).default(0),
+	allow_event_log: z.boolean().default(false),
 });
 
 export type AEyesConfig = z.infer<typeof ConfigSchema>;
@@ -19,6 +68,7 @@ const DEFAULT_CONFIG: AEyesConfig = {
 	save_screenshots: false,
 	screenshot_dir: "./screenshots",
 	max_captures_per_minute: 0,
+	allow_event_log: false,
 };
 
 async function tryReadConfig(filePath: string): Promise<AEyesConfig | null> {
@@ -79,16 +129,44 @@ export function isWindowAllowed(
 	windowTitle?: string,
 	processName?: string,
 ): boolean {
-	if (!config.allowlist || config.allowlist.length === 0) {
-		return false;
+	// Build effective policy list
+	let policies: Policy[];
+
+	if (config.policies && config.policies.length > 0) {
+		policies = config.policies;
+	} else if (config.allowlist && config.allowlist.length > 0) {
+		// Legacy: convert allowlist strings to allow policies (escaped for regex safety)
+		// + implicit catch-all deny at the end
+		policies = [
+			...config.allowlist.map((s) => ({
+				pattern: escapeRegex(s),
+				action: "allow" as const,
+			})),
+			{ pattern: ".*", action: "deny" as const },
+		];
+	} else {
+		return false; // no config → deny all
 	}
-	const lowerTitle = windowTitle?.toLowerCase() ?? "";
-	const lowerProcess = processName?.toLowerCase() ?? "";
-	return config.allowlist.some((pattern) => {
-		const lowerPattern = pattern.toLowerCase();
-		return (
-			(lowerTitle !== "" && lowerTitle.includes(lowerPattern)) ||
-			(lowerProcess !== "" && lowerProcess.includes(lowerPattern))
-		);
-	});
+
+	const candidates = [windowTitle, processName].filter(
+		(s): s is string => s !== undefined && s !== "",
+	);
+
+	for (const policy of policies) {
+		let regex: RegExp;
+		try {
+			regex = new RegExp(policy.pattern, "i");
+		} catch {
+			continue; // skip invalid regex patterns
+		}
+		if (candidates.some((c) => regex.test(c))) {
+			return policy.action === "allow";
+		}
+	}
+
+	return false; // no match → deny by default
+}
+
+function escapeRegex(s: string): string {
+	return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

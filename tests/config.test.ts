@@ -1,7 +1,14 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const PACKAGE_ROOT_CONFIG = resolve(
+	dirname(fileURLToPath(import.meta.url)),
+	"..",
+	"a-eyes.config.json",
+);
 
 const { mockHomeDir } = vi.hoisted(() => {
 	let dir = "";
@@ -109,11 +116,28 @@ describe("loadConfig", () => {
 
 		await expect(loadConfig(configPath)).rejects.toThrow(configPath);
 	});
+
+	it("loads valid config with policies", async () => {
+		const configPath = join(tempDir, "config.json");
+		await writeFile(
+			configPath,
+			JSON.stringify({
+				policies: [
+					{ pattern: ".*Password.*", action: "deny" },
+					{ pattern: "Chrome", action: "allow" },
+				],
+			}),
+		);
+		const config = await loadConfig(configPath);
+		expect(config.policies).toHaveLength(2);
+		expect(config.policies?.[0].action).toBe("deny");
+	});
 });
 
 describe("loadConfig search chain", () => {
 	let cwdDir: string;
 	let homeDir: string;
+	let originalPackageRootConfig: string | null = null;
 	const originalCwd = process.cwd;
 
 	beforeEach(async () => {
@@ -121,6 +145,15 @@ describe("loadConfig search chain", () => {
 		homeDir = await mkdtemp(join(tmpdir(), "a-eyes-home-"));
 		process.cwd = () => cwdDir;
 		mockHomeDir.set(homeDir);
+
+		// Back up any existing package-root config, then install test fixture so
+		// the "falls back to package root" tests find a known allowlist.
+		try {
+			originalPackageRootConfig = await readFile(PACKAGE_ROOT_CONFIG, "utf-8");
+		} catch {
+			originalPackageRootConfig = null;
+		}
+		await writeFile(PACKAGE_ROOT_CONFIG, JSON.stringify({ allowlist: ["PackageRootFixture"] }));
 	});
 
 	afterEach(async () => {
@@ -128,6 +161,13 @@ describe("loadConfig search chain", () => {
 		mockHomeDir.set("");
 		await rm(cwdDir, { recursive: true });
 		await rm(homeDir, { recursive: true });
+
+		// Restore original package-root config (or remove fixture if there was none).
+		if (originalPackageRootConfig !== null) {
+			await writeFile(PACKAGE_ROOT_CONFIG, originalPackageRootConfig);
+		} else {
+			await rm(PACKAGE_ROOT_CONFIG, { force: true });
+		}
 	});
 
 	it("prefers cwd config over home config", async () => {
@@ -221,5 +261,83 @@ describe("isWindowAllowed", () => {
 	it("blocks when no title or process provided", () => {
 		const config = { allowlist: ["Chrome"] };
 		expect(isWindowAllowed(config)).toBe(false);
+	});
+});
+
+describe("policy engine (policies format)", () => {
+	it("allows when pattern matches title", () => {
+		const config = { policies: [{ pattern: "^Chrome", action: "allow" as const }] };
+		expect(isWindowAllowed(config, "Chrome - New Tab")).toBe(true);
+	});
+
+	it("blocks when pattern does not match", () => {
+		const config = { policies: [{ pattern: "^Chrome", action: "allow" as const }] };
+		expect(isWindowAllowed(config, "Firefox")).toBe(false);
+	});
+
+	it("denies explicitly before broad allow (first-match-wins)", () => {
+		const config = {
+			policies: [
+				{ pattern: "Password", action: "deny" as const },
+				{ pattern: ".*", action: "allow" as const },
+			],
+		};
+		expect(isWindowAllowed(config, "Password Manager")).toBe(false);
+		expect(isWindowAllowed(config, "Notepad")).toBe(true);
+	});
+
+	it("denies when no policy matches", () => {
+		const config = {
+			policies: [{ pattern: "^Chrome", action: "allow" as const }],
+		};
+		expect(isWindowAllowed(config, "Firefox")).toBe(false);
+	});
+
+	it("matches against process name when title does not match", () => {
+		const config = {
+			policies: [{ pattern: "chrome", action: "allow" as const }],
+		};
+		expect(isWindowAllowed(config, "Some Window", "chrome")).toBe(true);
+	});
+
+	it("denies when process name matches deny rule", () => {
+		const config = {
+			policies: [
+				{ pattern: "keepass", action: "deny" as const },
+				{ pattern: ".*", action: "allow" as const },
+			],
+		};
+		expect(isWindowAllowed(config, "Some Title", "keepass")).toBe(false);
+	});
+
+	it("skips invalid regex patterns and continues", () => {
+		const config = {
+			policies: [
+				{ pattern: "[invalid", action: "allow" as const },
+				{ pattern: "Chrome", action: "allow" as const },
+			],
+		};
+		expect(isWindowAllowed(config, "Chrome")).toBe(true);
+	});
+
+	it("returns false for empty policies array", () => {
+		expect(isWindowAllowed({ policies: [] }, "Any Window")).toBe(false);
+	});
+
+	it("is case-insensitive", () => {
+		const config = { policies: [{ pattern: "CHROME", action: "allow" as const }] };
+		expect(isWindowAllowed(config, "google chrome")).toBe(true);
+	});
+
+	it("screen capture works via policy engine (no special case needed)", () => {
+		const config = { policies: [{ pattern: "__screen__", action: "allow" as const }] };
+		expect(isWindowAllowed(config, "__screen__")).toBe(true);
+		expect(isWindowAllowed(config, "regular window")).toBe(false);
+	});
+
+	it("legacy allowlist __screen__ still works", () => {
+		const config = { allowlist: ["__screen__"] };
+		expect(isWindowAllowed(config, "__screen__")).toBe(true);
+		expect(isWindowAllowed(config, "regular window")).toBe(false);
 	});
 });

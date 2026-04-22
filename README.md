@@ -1,5 +1,6 @@
 # A-Eyes
 
+[![CI](https://github.com/florian-priegnitz/a-eyes/actions/workflows/ci.yml/badge.svg)](https://github.com/florian-priegnitz/a-eyes/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-18%2B-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
@@ -125,7 +126,7 @@ A-Eyes searches for config in order: `./a-eyes.config.json` (cwd) → `<package-
 ## Testing
 
 ```bash
-pnpm test           # 146 tests across 10 files
+pnpm test           # 189 tests across 14 files
 pnpm lint           # Biome linter + formatter
 ```
 

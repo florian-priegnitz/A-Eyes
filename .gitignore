@@ -26,6 +26,7 @@ Thumbs.db
 
 # Test coverage
 coverage/
+!.claude/skills/coverage/
 
 # Temporary files
 *.tmp
