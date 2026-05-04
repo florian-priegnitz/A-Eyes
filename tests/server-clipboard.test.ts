@@ -19,9 +19,13 @@ vi.mock("../src/clipboard.js", () => ({
 	writeClipboard: writeClipboardMock,
 }));
 
-vi.mock("../src/audit-log.js", () => ({
-	writeAuditEntry: writeAuditEntryMock,
-}));
+vi.mock("@a-eyes/security", async () => {
+	const actual = await vi.importActual<typeof import("@a-eyes/security")>("@a-eyes/security");
+	return {
+		...actual,
+		writeAuditEntry: writeAuditEntryMock,
+	};
+});
 
 vi.mock("../src/config.js", () => ({
 	loadConfig: loadConfigMock,

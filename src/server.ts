@@ -1,7 +1,6 @@
-import { RateLimiter } from "@a-eyes/security";
+import { RateLimiter, writeAuditEntry } from "@a-eyes/security";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { writeAuditEntry } from "./audit-log.js";
 import { captureWindow } from "./capture.js";
 import { readClipboard, writeClipboard, writeImageToClipboard } from "./clipboard.js";
 import { type AEyesConfig, isWindowAllowed, loadConfig } from "./config.js";
