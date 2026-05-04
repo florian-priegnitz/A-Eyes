@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Repository converted to pnpm workspace (`pnpm-workspace.yaml`) — preparation for `@a-eyes/security` package extraction (#26). Root `a-eyes` consumes `@a-eyes/security` as `workspace:*` dependency (no source imports yet). `packages/security/` is an empty skeleton (`private: true`, structurally publishable). `prepare` script builds the package on `pnpm install`; `vitest.config.ts` `include`/`coverage.include` extended to cover `packages/*/`.
 - Ambient Awareness push strategy committed to `notifications/claude/channel` over standard MCP notifications — see ADR-004. Validation (#25) found that Claude Code v2.1.58 does not surface `notifications/message` or `notifications/resources/updated` to the model; channels (v2.1.80+) do. Downstream features #27/#28/#29 adopt channels.
 
 ### Added
