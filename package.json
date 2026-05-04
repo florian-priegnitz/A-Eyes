@@ -33,6 +33,7 @@
 		"node": ">=18.0.0"
 	},
 	"dependencies": {
+		"@a-eyes/security": "workspace:*",
 		"@modelcontextprotocol/sdk": "^1.12.1",
 		"sharp": "^0.34.5",
 		"zod": "^3.24.4"

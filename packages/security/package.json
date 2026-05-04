@@ -1,0 +1,30 @@
+{
+	"name": "@a-eyes/security",
+	"version": "0.0.0",
+	"description": "Reusable security primitives for MCP servers: deny-by-default allowlist, tamper-resistant audit log, content redaction, rate limiting",
+	"type": "module",
+	"main": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"files": ["dist/", "LICENSE", "README.md"],
+	"scripts": {
+		"build": "tsc",
+		"test": "vitest run --passWithNoTests",
+		"prepare": "tsc"
+	},
+	"keywords": ["mcp", "security", "allowlist", "audit-log", "redaction"],
+	"license": "MIT",
+	"author": "Florian Priegnitz",
+	"private": true,
+	"publishConfig": {
+		"access": "public"
+	},
+	"engines": {
+		"node": ">=18.0.0"
+	}
+}
