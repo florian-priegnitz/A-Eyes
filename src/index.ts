@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
+import { verifyLogs } from "@a-eyes/security";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { runHealthCheck } from "./health-check.js";
 import { createServer } from "./server.js";
-import { verifyLogs } from "./verify-logs.js";
 
 async function main() {
 	if (process.argv.includes("--check")) {
