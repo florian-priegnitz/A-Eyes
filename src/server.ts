@@ -1,3 +1,4 @@
+import { RateLimiter } from "@a-eyes/security";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { writeAuditEntry } from "./audit-log.js";
@@ -9,7 +10,6 @@ import { getEventLog } from "./event-log.js";
 import { runHealthCheck } from "./health-check.js";
 import { listWindows } from "./list-windows.js";
 import { getProcesses } from "./processes.js";
-import { RateLimiter } from "./rate-limiter.js";
 import { applyRedactions, findMatchingRedactionRules, findMatchingRules } from "./redact.js";
 import { resolveOutputPath, saveScreenshot } from "./save-screenshot.js";
 import { seeWindow } from "./see.js";
